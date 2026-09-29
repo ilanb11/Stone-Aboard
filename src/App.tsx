@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { BadgeDollarSign, CloudSun, FileSignature, Flame, LayoutDashboard, Map as MapIcon, Menu, Newspaper, PiggyBank, Search, Send, Users, X } from 'lucide-react'
+import { BadgeDollarSign, CloudSun, FileSignature, Flame, LayoutDashboard, Map as MapIcon, Menu, Newspaper, Search, Send, Users, X } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import HeatMap from './pages/HeatMap'
 import Accounts from './pages/Accounts'
@@ -17,14 +17,14 @@ import { initials } from './lib/format'
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/map', label: 'Heat Map', icon: MapIcon },
+  { to: '/map', label: 'Heat map', icon: MapIcon },
   { to: '/accounts', label: 'Accounts', icon: Users },
   { to: '/opportunities', label: 'Opportunities', icon: Flame },
-  { to: '/signals', label: 'Signals & Newsletter', icon: Newspaper },
-  { to: '/outreach', label: 'Automated Outreach', icon: Send },
+  { to: '/signals', label: 'Signals and newsletter', icon: Newspaper },
+  { to: '/outreach', label: 'Automated outreach', icon: Send },
   { to: '/pricing', label: 'Pricing', icon: BadgeDollarSign },
-  { to: '/contracts', label: 'Contracts · Lucas', icon: FileSignature },
-  { to: '/weather', label: 'Weather & Health', icon: CloudSun },
+  { to: '/contracts', label: 'Contracts and Lucas', icon: FileSignature },
+  { to: '/weather', label: 'Weather and health', icon: CloudSun },
 ]
 
 function GlobalSearch() {
@@ -45,23 +45,25 @@ function GlobalSearch() {
   }, [])
   return (
     <div ref={box} className="relative w-full max-w-md">
-      <Search size={16} className="pointer-events-none absolute left-2.5 top-2 text-muted" />
+      <Search size={16} className="pointer-events-none absolute left-3.5 top-2.5 text-muted" />
       <input
+        id="global-search"
         value={q}
         onChange={(e) => {
           setQ(e.target.value)
           setOpen(true)
         }}
         onFocus={() => setOpen(true)}
-        placeholder="Search accounts, contacts, counties…"
-        className="h-8 w-full rounded-md border border-line bg-surface pl-8 pr-3 text-sm text-ink outline-none focus:border-accent"
+        placeholder="Search accounts, contacts or counties"
+        aria-label="Search accounts"
+        className="h-9 w-full rounded-full bg-accent-soft pl-10 pr-4 text-[14px] text-ink outline-none transition-colors placeholder:text-muted hover:bg-accent-soft-2 focus:bg-surface focus:ring-1 focus:ring-line-strong"
       />
       {open && results.length > 0 && (
-        <ul className="absolute z-40 mt-1 w-full overflow-hidden rounded-lg border border-line bg-surface shadow-lg">
+        <ul className="absolute z-40 mt-2 w-full overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface p-1.5 shadow-[0_16px_40px_-12px_rgb(0_0_0/0.25)]">
           {results.map((a) => (
             <li key={a.id}>
               <button
-                className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-surface-2"
+                className="flex w-full items-center justify-between gap-3 rounded-[12px] px-3 py-2 text-left text-[14px] hover:bg-accent-soft"
                 onClick={() => {
                   nav(`/accounts/${a.id}`)
                   setOpen(false)
@@ -69,7 +71,9 @@ function GlobalSearch() {
                 }}
               >
                 <span className="truncate text-ink">{a.name}</span>
-                <span className="shrink-0 text-xs text-muted">{a.segment} · {a.state}</span>
+                <span className="shrink-0 text-[12px] text-muted">
+                  {a.segment}, {a.state}
+                </span>
               </button>
             </li>
           ))}
@@ -88,52 +92,56 @@ export default function App() {
   }, [loc.pathname])
 
   return (
-    <div className="flex h-full">
-      <aside className={`fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-line bg-surface transition-transform lg:static lg:translate-x-0 ${menu ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="flex h-14 items-center gap-2 border-b border-line px-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-white">
-            <PiggyBank size={18} />
+    <div className="flex h-full bg-page">
+      <aside
+        className={`rail fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-rail text-rail-ink transition-transform lg:static lg:translate-x-0 ${menu ? 'translate-x-0' : '-translate-x-full'}`}
+      >
+        <div className="flex items-center gap-2.5 px-6 pb-8 pt-7">
+          <span className="relative flex h-7 w-7 items-center justify-center rounded-full bg-rail-ink">
+            <span className="h-2.5 w-2.5 rounded-full bg-lime" />
+          </span>
+          <div className="leading-none">
+            <div className="text-[20px] tracking-[-0.03em]">Herdbook</div>
+            <div className="mt-1 text-[12px] text-rail-muted">ThiboLiSoft for hog and cattle</div>
           </div>
-          <div>
-            <div className="text-sm font-semibold leading-tight text-ink">Herdbook CRM</div>
-            <div className="text-[11px] leading-tight text-muted">ThiboLiSoft · Hog & Cattle</div>
-          </div>
-          <button className="ml-auto lg:hidden" onClick={() => setMenu(false)} aria-label="Close menu">
+          <button className="ml-auto rounded-full p-1 text-rail-muted hover:text-rail-ink lg:hidden" onClick={() => setMenu(false)} aria-label="Close menu">
             <X size={18} />
           </button>
         </div>
-        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2">
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3" aria-label="Main">
           {NAV.map((n) => (
             <NavLink
               key={n.to}
               to={n.to}
               end={n.to === '/'}
-              className={({ isActive }) => `flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium ${isActive ? 'bg-accent-soft text-accent' : 'text-ink-2 hover:bg-surface-2 hover:text-ink'}`}
+              className={({ isActive }) =>
+                `flex h-10 items-center gap-3 rounded-full px-4 text-[14px] transition-colors ${isActive ? 'bg-lime text-on-lime' : 'text-rail-muted hover:bg-white/10 hover:text-rail-ink'}`
+              }
             >
-              <n.icon size={16} />
+              <n.icon size={16} strokeWidth={1.8} />
               {n.label}
             </NavLink>
           ))}
         </nav>
-        <div className="border-t border-line p-3 text-[11px] leading-snug text-muted">
-          Demo data: accounts, contacts, signals and contracts are synthetic. State inventories are indicative. Outreach is simulated; no email is sent.
+        <div className="mx-6 mb-6 mt-4 border-t border-rail-line pt-4 text-[12px] leading-relaxed text-rail-muted">
+          Demo data. Accounts, contacts, signals and contracts are synthetic, and outreach is simulated.
         </div>
       </aside>
-      {menu && <div className="fixed inset-0 z-30 bg-black/30 lg:hidden" onClick={() => setMenu(false)} />}
+      {menu && <div className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={() => setMenu(false)} />}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="no-print flex h-14 shrink-0 items-center gap-3 border-b border-line bg-surface px-4">
-          <button className="lg:hidden" onClick={() => setMenu(true)} aria-label="Open menu">
+        <header className="no-print sticky top-0 z-20 flex h-16 shrink-0 items-center gap-3 border-b border-line bg-page/80 px-4 backdrop-blur-md sm:px-8">
+          <button className="rounded-full p-1.5 text-ink hover:bg-accent-soft lg:hidden" onClick={() => setMenu(true)} aria-label="Open menu">
             <Menu size={20} />
           </button>
           <GlobalSearch />
-          <div className="ml-auto flex items-center gap-2">
-            <span className="hidden text-sm text-ink-2 sm:inline">{CURRENT_USER}</span>
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-accent">{initials(CURRENT_USER)}</span>
+          <div className="ml-auto flex items-center gap-3">
+            <span className="hidden text-[14px] text-ink-2 sm:inline">{CURRENT_USER}</span>
+            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-[12px] font-medium text-on-accent">{initials(CURRENT_USER)}</span>
           </div>
         </header>
         <main id="main" className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6">
+          <div className="mx-auto max-w-[1440px] px-4 pb-16 pt-8 sm:px-8">
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/map" element={<HeatMap />} />

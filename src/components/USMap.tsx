@@ -80,17 +80,15 @@ export function USMap({
               d={s.d}
               fill={fill(s.code)}
               opacity={dimStates ? 0.55 : 1}
-              stroke={selected === s.code ? 'var(--color-ink)' : 'none'}
-              strokeWidth={selected === s.code ? 2 : 0}
               className={onStateClick ? 'cursor-pointer' : ''}
               onClick={() => onStateClick?.(s.code)}
               onMouseMove={(e) => stateTooltip && move(e, stateTooltip(s.code))}
             />
           ))}
         </g>
-        <path d={BORDERS} fill="none" stroke="var(--color-surface)" strokeWidth={1} pointerEvents="none" />
+        <path d={BORDERS} fill="none" stroke="var(--color-surface)" strokeWidth={1.25} strokeLinejoin="round" pointerEvents="none" />
         {selected && (
-          <path d={STATE_PATHS.find((s) => s.code === selected)?.d} fill="none" stroke="var(--color-ink)" strokeWidth={2} pointerEvents="none" />
+          <path d={STATE_PATHS.find((s) => s.code === selected)?.d} fill="none" stroke="var(--color-ink)" strokeWidth={2.5} strokeLinejoin="round" pointerEvents="none" />
         )}
         {projected.length > 0 && (
           <g>
@@ -101,7 +99,7 @@ export function USMap({
                 cy={p.y}
                 r={p.r}
                 fill={p.color}
-                stroke="var(--color-surface)"
+                stroke="var(--color-marker-ring)"
                 strokeWidth={1}
                 className="cursor-pointer"
                 onClick={() => onPointClick?.(p.id)}
@@ -116,7 +114,7 @@ export function USMap({
       </svg>
       {tip && tip.content && (
         <div
-          className="pointer-events-none absolute z-10 max-w-64 rounded-lg border border-line bg-surface px-3 py-2 text-xs text-ink shadow-lg"
+          className="pointer-events-none absolute z-10 max-w-64 rounded-[14px] bg-accent px-3.5 py-2.5 text-[13px] leading-snug text-on-accent [&_.text-ink-2]:text-on-accent/75 [&_.text-muted]:text-on-accent/60"
           style={{ left: Math.min(tip.x + 14, (ref.current?.clientWidth ?? 0) - 220), top: tip.y + 14 }}
         >
           {tip.content}

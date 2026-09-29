@@ -114,7 +114,8 @@ export function loadWeather(accounts: Account[]): Promise<WeatherState> {
       timezone: 'auto',
       forecast_days: '7',
     })
-  inflight = fetch(url)
+  // The published demo link can't reach outside APIs, so it uses the modeled forecast.
+  inflight = (import.meta.env.VITE_ARTIFACT ? Promise.reject(new Error('offline demo')) : fetch(url))
     .then((r) => {
       if (!r.ok) throw new Error(`Open-Meteo ${r.status}`)
       return r.json()

@@ -1,15 +1,27 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, Building2, FileSignature, Mail, Send, UserPlus } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, FileSignature, Mail, Send, UserPlus } from 'lucide-react'
 import { useBook, signalsByAccount } from '../lib/useData'
 import { CURRENT_USER, useCrm } from '../store'
 import { PRODUCT, unitLabel } from '../data/products'
-import { Button, Card, Chip, Empty, HealthBadge, PageHeader, StatusBadge, WeatherBadge } from '../components/ui'
-import { money, num, relDays, shortDate } from '../lib/format'
+import { Button, Card, Chip, Empty, HealthBadge, Notice, PageHeader, StatusBadge, TextLink, WeatherBadge, inputClass } from '../components/ui'
+import { initials, money, num, relDays, shortDate } from '../lib/format'
 import { mrr } from '../lib/pricing'
 import { draftForSignal, draftForWeather, whitespace } from '../lib/outreach'
 import { toF, thi } from '../lib/weather'
 import { PriceAnalysisPanel, priceNoticeDraft } from './Pricing'
+
+/** Label above value, like a spec sheet. */
+function Fact({ label, children, className = '' }: { label: string; children: ReactNode; className?: string }) {
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <div className="text-[12px] text-muted">{label}</div>
+      <div className="mt-0.5 text-ink">{children}</div>
+    </div>
+  )
+}
+
+const th = 'px-4 py-3 text-[13px] font-normal text-muted'
 
 export default function AccountDetail() {
   const { id } = useParams()
@@ -23,7 +35,15 @@ export default function AccountDetail() {
   const [note, setNote] = useState('')
   const [flash, setFlash] = useState<string | null>(null)
   const a = id ? book.byId[id] : undefined
-  if (!a) return <Empty>Account not found. <Link to="/accounts" className="text-accent">Back to accounts</Link></Empty>
+  if (!a)
+    return (
+      <Empty>
+        Account not found.{' '}
+        <Link to="/accounts" className="text-ink underline underline-offset-4">
+          Back to accounts
+        </Link>
+      </Empty>
+    )
 
   const sigs = signalsByAccount[a.id] ?? []
   const contract = a.contractId ? book.contractById[a.contractId] : undefined
@@ -41,109 +61,180 @@ export default function AccountDetail() {
     setTimeout(() => setFlash(null), 2500)
   }
 
+  const facts: [string, ReactNode][] = [
+    ['Head', num(a.headCount)],
+    ['Sites', a.sites],
+    ['Barns', a.barns],
+    ['Acres', num(a.acres)],
+    ['Employees', a.employees],
+    ['Founded', a.yearFounded],
+    ['ARR', a.status === 'Customer' ? money(mrr(a) * 12) : '—'],
+  ]
+
   return (
     <div>
-      <Link to="/accounts" className="mb-3 inline-flex items-center gap-1 text-xs font-medium text-ink-2 hover:text-ink"><ArrowLeft size={14} /> Accounts</Link>
+      <Link to="/accounts" className="mb-4 inline-flex items-center gap-1.5 text-[13px] text-ink-2 transition-colors hover:text-ink">
+        <ArrowLeft size={14} aria-hidden /> All accounts
+      </Link>
       <PageHeader
         title={a.name}
         subtitle={
-          <span className="flex flex-wrap items-center gap-2">
-            <Chip tone={a.status === 'Customer' ? 'accent' : 'neutral'}>{a.status}</Chip>
-            <span>{a.species} · {a.segment} · {a.county} Co., {a.state}</span>
-            <span className="text-muted">· Rep {a.rep}</span>
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <Chip tone={a.status === 'Customer' ? 'accent' : a.status === 'Churned' ? 'dim' : 'neutral'}>{a.status}</Chip>
+            <span>
+              {a.species}, {a.segment}
+            </span>
+            <span>
+              {a.county} Co., {a.state}
+            </span>
+            <span className="text-muted">Rep {a.rep}</span>
           </span>
         }
-        actions={negotiation && <Link to={`/contracts/${negotiation.id}`}><Button variant="primary"><FileSignature size={14} /> Open in Lucas</Button></Link>}
+        actions={
+          negotiation && (
+            // A link styled as the primary pill: a <button> inside an <a> is invalid and adds a second tab stop.
+            <Link
+              to={`/contracts/${negotiation.id}`}
+              className="inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-accent px-4 text-[14px] font-medium text-on-accent transition hover:opacity-85"
+            >
+              <FileSignature size={14} aria-hidden /> Open in Lucas
+            </Link>
+          )
+        }
       />
-      {flash && <div className="mb-3 rounded-lg border border-line bg-accent-soft px-3 py-2 text-sm text-accent">{flash}</div>}
+      {flash && <Notice>{flash}</Notice>}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
-        {[
-          ['Head', num(a.headCount)],
-          ['Sites', a.sites],
-          ['Barns', a.barns],
-          ['Acres', num(a.acres)],
-          ['Employees', a.employees],
-          ['Founded', a.yearFounded],
-          ['ARR', a.status === 'Customer' ? money(mrr(a) * 12) : '—'],
-          ['Ownership', a.ownership],
-        ].map(([l, v]) => (
-          <div key={l as string} className="rounded-lg border border-line bg-surface px-3 py-2">
-            <div className="text-[11px] text-muted">{l}</div>
-            <div className="truncate text-sm font-semibold text-ink">{v}</div>
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-5 rounded-[var(--radius-card)] border border-line bg-surface p-5 sm:grid-cols-4 xl:grid-cols-7">
+        {facts.map(([l, v]) => (
+          <div key={l} className="min-w-0">
+            <dt className="text-[12px] text-muted">{l}</dt>
+            <dd className="figure mt-2 break-words text-[30px] text-ink">{v}</dd>
           </div>
         ))}
-      </div>
+      </dl>
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1.3fr_1fr]">
-        <div className="flex flex-col gap-4">
-          <Card title="Organization" action={<span className="text-xs text-muted">{a.contacts.length} contacts</span>}>
-            <div className="mb-3 flex flex-wrap gap-4 text-sm">
-              <span className="inline-flex items-center gap-1.5 text-ink-2"><Building2 size={14} /> Parent: <b className="font-medium text-ink">{a.parentCompany ?? 'Independent'}</b></span>
-              {a.integrator && <span className="text-ink-2">{a.species === 'Hog' ? 'Integrator' : 'Packer / co-op'}: <b className="font-medium text-ink">{a.integrator}</b></span>}
-              {a.competitor && <span className="text-ink-2">Incumbent: <b className="font-medium text-ink">{a.competitor}</b>{a.competitorRenewal && <> (renews {shortDate(a.competitorRenewal)})</>}</span>}
+      <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+        <div className="flex min-w-0 flex-col gap-5">
+          <Card title="Organization" action={<span className="tabular text-[13px] text-muted">{a.contacts.length} contacts</span>}>
+            <div className="mb-5 flex flex-wrap gap-x-8 gap-y-3 text-[14px]">
+              <Fact label="Ownership">{a.ownership}</Fact>
+              <Fact label="Parent company">{a.parentCompany ?? 'Independent'}</Fact>
+              {a.integrator && <Fact label={a.species === 'Hog' ? 'Integrator' : 'Packer or co-op'}>{a.integrator}</Fact>}
+              {a.competitor && (
+                <Fact label="Incumbent">
+                  {a.competitor}
+                  {a.competitorRenewal && <span className="text-muted">, renews {shortDate(a.competitorRenewal)}</span>}
+                </Fact>
+              )}
             </div>
             <ul className="grid gap-2 sm:grid-cols-2">
-              {[...a.contacts].sort((x, y) => y.since.localeCompare(x.since)).map((c) => {
-                const isNew = new Date(c.since).getTime() > recentCutoff
-                return (
-                  <li key={c.id} className="flex items-start gap-2 rounded-lg border border-line px-3 py-2">
-                    <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-2 text-[11px] font-semibold text-ink-2">{c.name.split(' ').map((p) => p[0]).join('')}</span>
-                    <div className="min-w-0 text-sm">
-                      <div className="flex items-center gap-1.5 font-medium text-ink">{c.name}{isNew && <Chip tone="accent"><UserPlus size={11} /> New</Chip>}</div>
-                      <div className="text-xs text-ink-2">{c.title}</div>
-                      <div className="truncate text-xs text-muted">{c.email} · since {shortDate(c.since)}</div>
-                    </div>
-                  </li>
-                )
-              })}
+              {[...a.contacts]
+                .sort((x, y) => y.since.localeCompare(x.since))
+                .map((c) => {
+                  const isNew = new Date(c.since).getTime() > recentCutoff
+                  return (
+                    <li key={c.id} className="flex min-w-0 items-start gap-3 rounded-[14px] bg-accent-soft px-3.5 py-3">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-[11px] font-medium text-on-accent" aria-hidden>
+                        {initials(c.name)}
+                      </span>
+                      <div className="min-w-0 text-[14px]">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ink">
+                          <span className="font-medium">{c.name}</span>
+                          {isNew && (
+                            <Chip tone="lime">
+                              <UserPlus size={11} aria-hidden /> New
+                            </Chip>
+                          )}
+                        </div>
+                        <div className="text-[13px] text-ink-2">{c.title}</div>
+                        <div className="mt-0.5 flex min-w-0 flex-wrap gap-x-3 text-[12px] text-muted">
+                          <span className="max-w-full truncate">{c.email}</span>
+                          <span className="whitespace-nowrap">Since {shortDate(c.since)}</span>
+                        </div>
+                      </div>
+                    </li>
+                  )
+                })}
             </ul>
           </Card>
 
-          <Card title="Change history & signals" pad={false}>
+          <Card title="Change history and signals" pad={false}>
             {sigs.length ? (
-              <ul className="divide-y divide-line">
+              <ul className="mt-2 divide-y divide-line">
                 {sigs.map((s) => (
-                  <li key={s.id} className="flex items-start justify-between gap-3 px-4 py-2.5">
+                  <li key={s.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
                     <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2"><Chip>{s.type}</Chip><span className="text-[11px] text-muted">{shortDate(s.date)} · {s.source}</span></div>
-                      <div className="mt-1 text-sm font-medium text-ink">{s.headline}</div>
-                      <div className="text-xs text-ink-2">{s.detail}</div>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                        <Chip>{s.type}</Chip>
+                        {s.severity === 'High' && <StatusBadge tone="serious">High</StatusBadge>}
+                        <span className="meta text-muted">{shortDate(s.date)}</span>
+                        <span className="text-[13px] text-muted">{s.source}</span>
+                      </div>
+                      <div className="mt-2 text-[15px] font-medium leading-snug text-ink">{s.headline}</div>
+                      <p className="mt-1 max-w-[68ch] text-[14px] leading-relaxed text-ink-2">{s.detail}</p>
                     </div>
-                    <Button size="sm" onClick={() => {
-                      const d = draftForSignal(a, s, a.rep)
-                      queueOutreach({ accountId: a.id, signalId: s.id, trigger: s.type, playbook: d.playbook, contactName: d.contact.name, contactEmail: d.contact.email, subject: d.subject, body: d.body, auto: false, status: 'Draft' })
-                      toast('Draft added to the outreach queue.')
-                    }}><Mail size={12} /> Draft outreach</Button>
+                    <div className="shrink-0">
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          const d = draftForSignal(a, s, a.rep)
+                          queueOutreach({ accountId: a.id, signalId: s.id, trigger: s.type, playbook: d.playbook, contactName: d.contact.name, contactEmail: d.contact.email, subject: d.subject, body: d.body, auto: false, status: 'Draft' })
+                          toast('Draft added to the outreach queue')
+                        }}
+                      >
+                        <Mail size={12} /> Draft outreach
+                      </Button>
+                    </div>
                   </li>
                 ))}
               </ul>
-            ) : <div className="p-4 text-sm text-muted">No recorded changes.</div>}
+            ) : (
+              <div className="px-5 pb-3 pt-2 text-[14px] text-muted">No changes recorded yet.</div>
+            )}
           </Card>
 
           {a.status !== 'Prospect' && (
             <Card title="Subscriptions" pad={false}>
-              <table className="w-full text-sm">
-                <thead className="border-b border-line text-xs text-ink-2">
-                  <tr><th className="px-4 py-2 text-left font-medium">Product</th><th className="px-3 py-2 text-right font-medium">Units</th><th className="px-3 py-2 text-right font-medium">Unit price</th><th className="px-3 py-2 text-right font-medium">List</th><th className="px-3 py-2 text-right font-medium">Discount</th><th className="px-4 py-2 text-right font-medium">Monthly</th></tr>
-                </thead>
-                <tbody className="divide-y divide-line">
-                  {a.subscriptions.map((s) => {
-                    const p = PRODUCT[s.productId]
-                    return (
-                      <tr key={s.productId}>
-                        <td className="px-4 py-2 text-ink">{p.name}<div className="text-[11px] text-muted">per {unitLabel(p.unit)}</div></td>
-                        <td className="tabular px-3 py-2 text-right">{s.units}</td>
-                        <td className="tabular px-3 py-2 text-right">${s.unitPrice.toFixed(2)}</td>
-                        <td className="tabular px-3 py-2 text-right text-muted">${p.listPrice}</td>
-                        <td className="tabular px-3 py-2 text-right">{((1 - s.unitPrice / p.listPrice) * 100).toFixed(0)}%</td>
-                        <td className="tabular px-4 py-2 text-right">{money(s.units * s.unitPrice)}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-              {ws.length > 0 && <div className="border-t border-line px-4 py-2 text-xs text-ink-2">White space: {ws.map((p) => PRODUCT[p].name).join(', ')}</div>}
+              <div className="mt-1 overflow-x-auto">
+                <table className="w-full min-w-[560px] text-[14px]">
+                  <thead>
+                    <tr>
+                      <th className={`${th} pl-5 text-left`}>Product</th>
+                      <th className={`${th} text-right`}>Units</th>
+                      <th className={`${th} text-right`}>Unit price</th>
+                      <th className={`${th} text-right`}>List</th>
+                      <th className={`${th} text-right`}>Discount</th>
+                      <th className={`${th} pr-5 text-right`}>Monthly</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {a.subscriptions.map((s) => {
+                      const p = PRODUCT[s.productId]
+                      return (
+                        <tr key={s.productId} className="border-t border-line transition-colors hover:bg-accent-soft/60">
+                          <td className="py-3 pl-5 pr-4 text-ink">
+                            {p.name}
+                            <div className="text-[12px] text-muted">Per {unitLabel(p.unit)}</div>
+                          </td>
+                          <td className="tabular px-4 py-3 text-right text-ink">{s.units}</td>
+                          <td className="tabular px-4 py-3 text-right text-ink">${s.unitPrice.toFixed(2)}</td>
+                          <td className="tabular px-4 py-3 text-right text-muted">${p.listPrice}</td>
+                          <td className="tabular px-4 py-3 text-right text-ink">{((1 - s.unitPrice / p.listPrice) * 100).toFixed(0)}%</td>
+                          <td className="tabular py-3 pl-4 pr-5 text-right text-ink">{money(s.units * s.unitPrice)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {ws.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 border-t border-line px-5 pb-2 pt-4">
+                  <span className="mr-1 text-[12px] text-muted">White space</span>
+                  {ws.map((p) => (
+                    <Chip key={p}>{PRODUCT[p].name}</Chip>
+                  ))}
+                </div>
+              )}
             </Card>
           )}
 
@@ -151,16 +242,23 @@ export default function AccountDetail() {
             <Card title="Pricing normalization">
               <PriceAnalysisPanel a={a} pa={pa} contract={contract} />
               {pa.status === 'Under-priced' && pa.ability && (
-                <div className="mt-3 flex flex-wrap items-center gap-2">
+                <div className="mt-4 flex flex-wrap items-center gap-2">
                   {proposals[a.id] ? (
-                    <StatusBadge tone="good">Proposed +{proposals[a.id].pct.toFixed(1)}% on {shortDate(proposals[a.id].createdAt)}</StatusBadge>
+                    <StatusBadge tone="good">
+                      Proposed +{proposals[a.id].pct.toFixed(1)}% on {shortDate(proposals[a.id].createdAt)}
+                    </StatusBadge>
                   ) : (
-                    <Button variant="primary" onClick={() => {
-                      proposePrice(a.id, pa.recommendedPct, pa.ability!.effectiveDate)
-                      const d = priceNoticeDraft(a, pa)
-                      queueOutreach({ ...d, auto: false, status: 'Draft' })
-                      toast('Price notice drafted and added to the outreach queue for approval.')
-                    }}>Propose +{pa.recommendedPct.toFixed(1)}% & draft notice</Button>
+                    <Button
+                      variant="primary"
+                      onClick={() => {
+                        proposePrice(a.id, pa.recommendedPct, pa.ability!.effectiveDate)
+                        const d = priceNoticeDraft(a, pa)
+                        queueOutreach({ ...d, auto: false, status: 'Draft' })
+                        toast('Price notice drafted and added to the outreach queue for approval')
+                      }}
+                    >
+                      Propose +{pa.recommendedPct.toFixed(1)}% and draft notice
+                    </Button>
                   )}
                 </div>
               )}
@@ -168,36 +266,59 @@ export default function AccountDetail() {
           )}
         </div>
 
-        <div className="flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-5">
           {a.status === 'Customer' && (
-            <Card title="Weather & account health">
-              <div className="flex flex-wrap items-center gap-4">
+            <Card title="Weather and account health">
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
                 <HealthBadge h={book.health[a.id]} />
                 <WeatherBadge w={wr} />
               </div>
-              {wr?.kind && <p className="mt-2 text-xs text-ink-2">Forecast: {wr.detail}.</p>}
+              {wr?.kind && <p className="mt-2 text-[13px] text-ink-2">Forecast: {wr.detail}.</p>}
               {forecast && (
-                <div className="mt-3 grid grid-cols-7 gap-1 text-center text-[11px]">
-                  {forecast.map((d) => (
-                    <div key={d.date} className="rounded-md bg-surface-2 py-1.5">
-                      <div className="text-muted">{new Date(d.date + 'T12:00').toLocaleDateString('en-US', { weekday: 'short' })}</div>
-                      <div className="tabular font-semibold">{toF(d.tmax)}°</div>
-                      <div className="tabular text-muted">{toF(d.tmin)}°</div>
-                      <div className="tabular text-ink-2">{Math.round(thi(d.tmax, d.rh))}</div>
+                <>
+                  <ol className="mt-4 grid grid-cols-7 gap-1.5 text-center" aria-label="7-day forecast">
+                    {forecast.map((d) => {
+                      const flagged = !!wr?.kind && wr.day === d.date
+                      const weekday = new Date(d.date + 'T12:00').toLocaleDateString('en-US', { weekday: 'short' })
+                      return (
+                        <li
+                          key={d.date}
+                          className={`min-w-0 rounded-[14px] bg-accent-soft px-0.5 py-2.5 ${flagged ? 'ring-1 ring-inset ring-ink' : ''}`}
+                          title={`${weekday}: high ${toF(d.tmax)}°F, low ${toF(d.tmin)}°F, THI ${Math.round(thi(d.tmax, d.rh))}`}
+                        >
+                          <div className="text-[12px] text-muted">{weekday}</div>
+                          <div className="tabular mt-1 text-[15px] text-ink">{toF(d.tmax)}°</div>
+                          <div className="tabular text-[12px] text-muted">{toF(d.tmin)}°</div>
+                          <div className="tabular mx-1.5 mt-1.5 border-t border-line pt-1.5 text-[12px] text-ink-2">{Math.round(thi(d.tmax, d.rh))}</div>
+                        </li>
+                      )
+                    })}
+                  </ol>
+                  <p className="mt-2 text-[12px] text-muted">Daily high, low and THI.{wr?.kind ? ' The riskiest day is outlined.' : ''}</p>
+                </>
+              )}
+              {book.health[a.id] && (
+                <dl className="mt-4 grid gap-x-6 gap-y-1.5 border-t border-line pt-4 text-[13px] sm:grid-cols-2">
+                  {book.health[a.id].parts.map((p) => (
+                    <div key={p.label} className="flex min-w-0 justify-between gap-2">
+                      <dt className="truncate text-ink-2">{p.label}</dt>
+                      <dd className="tabular text-ink">{p.value}</dd>
                     </div>
                   ))}
-                </div>
+                </dl>
               )}
-              <ul className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                {book.health[a.id]?.parts.map((p) => <li key={p.label} className="flex justify-between"><span className="text-ink-2">{p.label}</span><span className="tabular text-ink">{p.value}</span></li>)}
-              </ul>
               {wr?.kind && (
-                <div className="mt-3">
-                  <Button size="sm" onClick={() => {
-                    const d = draftForWeather(a, wr.kind!, wr.day ? new Date(wr.day + 'T12:00').toLocaleDateString('en-US', { weekday: 'long' }) : 'this week', wr.detail, a.rep)
-                    queueOutreach({ accountId: a.id, trigger: `Weather: ${wr.kind}`, playbook: d.playbook, contactName: d.contact.name, contactEmail: d.contact.email, subject: d.subject, body: d.body, auto: false, status: 'Draft' })
-                    toast('Support message drafted.')
-                  }}><Send size={12} /> Draft support message</Button>
+                <div className="mt-4">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      const d = draftForWeather(a, wr.kind!, wr.day ? new Date(wr.day + 'T12:00').toLocaleDateString('en-US', { weekday: 'long' }) : 'this week', wr.detail, a.rep)
+                      queueOutreach({ accountId: a.id, trigger: `Weather: ${wr.kind}`, playbook: d.playbook, contactName: d.contact.name, contactEmail: d.contact.email, subject: d.subject, body: d.body, auto: false, status: 'Draft' })
+                      toast('Support message drafted and added to the outreach queue')
+                    }}
+                  >
+                    <Send size={12} /> Draft support message
+                  </Button>
                 </div>
               )}
             </Card>
@@ -205,58 +326,107 @@ export default function AccountDetail() {
 
           <Card title="Contract">
             {contract || negotiation ? (
-              <div className="flex flex-col gap-3 text-sm">
+              <div className="flex flex-col gap-3 text-[14px]">
                 {[contract, negotiation].filter(Boolean).map((c) => (
-                  <div key={c!.id} className="rounded-lg border border-line p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium text-ink">{c!.id} · {c!.template}</span>
-                      <Chip tone={c!.status === 'In Negotiation' ? 'accent' : 'neutral'}>{c!.status}</Chip>
+                  <div key={c!.id} className="rounded-[14px] bg-accent-soft p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                        <span className="meta text-muted">{c!.id}</span>
+                        <span className="text-ink">{c!.template}</span>
+                      </span>
+                      <Chip tone={c!.status === 'Expired' ? 'dim' : 'neutral'}>{c!.status}</Chip>
                     </div>
-                    <div className="mt-1 grid grid-cols-2 gap-1 text-xs text-ink-2">
-                      <span>Term: {c!.termMonths} mo, ends {shortDate(c!.end)}</span>
-                      <span>Auto-renew: {c!.autoRenew ? `yes (${c!.renewalNoticeDays}d notice)` : 'no'}</span>
-                      <span>Pricing: {c!.price.mechanism}{c!.price.capPct ? ` (cap ${c!.price.capPct}%)` : ''}</span>
-                      <span>Payment: {c!.paymentTerms}{c!.mfn ? ' · MFN' : ''}</span>
-                      <span className="col-span-2">Change of control: {c!.assignmentOnChangeOfControl}</span>
+                    <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-[13px]">
+                      <Fact label="Term">
+                        {c!.termMonths} months, ends {shortDate(c!.end)}
+                      </Fact>
+                      <Fact label="Auto-renew">{c!.autoRenew ? `Yes, ${c!.renewalNoticeDays}-day notice` : 'No'}</Fact>
+                      <Fact label="Pricing">
+                        {c!.price.mechanism}
+                        {c!.price.capPct ? `, cap ${c!.price.capPct}%` : ''}
+                      </Fact>
+                      <Fact label="Payment">
+                        {c!.paymentTerms}
+                        {c!.mfn ? ', MFN' : ''}
+                      </Fact>
+                      <Fact label="Change of control" className="col-span-2">
+                        {c!.assignmentOnChangeOfControl}
+                      </Fact>
                     </div>
-                    {c!.status === 'In Negotiation' && <Link to={`/contracts/${c!.id}`} className="mt-2 inline-block text-xs font-medium text-accent">{c!.redlines.length} redlines: review with Lucas →</Link>}
+                    {c!.status === 'In Negotiation' && (
+                      <Link to={`/contracts/${c!.id}`} className="mt-4 inline-block">
+                        <TextLink>Review {c!.redlines.length} redlines with Lucas</TextLink>
+                      </Link>
+                    )}
                   </div>
                 ))}
                 {a.parentCompany && contract?.assignmentOnChangeOfControl === 'Consent required' && sigs.some((s) => s.type === 'Ownership Change') && (
-                  <StatusBadge tone="warning">Ownership changed and assignment needs our consent. Review with the new owner.</StatusBadge>
+                  <div className="flex items-start gap-2.5 rounded-[14px] bg-accent-soft px-4 py-3 text-[14px] text-ink" role="status">
+                    <AlertTriangle size={14} strokeWidth={2.25} className="mt-[3px] shrink-0 text-warning" aria-hidden />
+                    <span className="min-w-0">Ownership changed and assignment needs our consent. Review with the new owner.</span>
+                  </div>
                 )}
               </div>
-            ) : <div className="text-sm text-muted">No contract on file.</div>}
+            ) : (
+              <div className="text-[14px] text-muted">No contract on file.</div>
+            )}
           </Card>
 
           <Card title="Opportunities" pad={false}>
             {opps.length ? (
-              <ul className="divide-y divide-line">
+              <ul className="mt-2 divide-y divide-line">
                 {opps.map((o) => (
-                  <li key={o.id} className="flex items-center justify-between gap-2 px-4 py-2 text-sm">
-                    <div><span className="font-medium text-ink">{o.type}</span> <span className="text-xs text-muted">· {o.products.map((p) => PRODUCT[p].name).join(', ')}</span></div>
-                    <div className="flex items-center gap-2"><Chip>{o.stage}</Chip><span className="tabular">{money(o.arr)}</span></div>
+                  <li key={o.id} className="flex items-center justify-between gap-3 px-5 py-3 text-[14px]">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                        <Chip tone={o.type === 'Price Normalization' ? 'accent' : 'neutral'}>{o.type}</Chip>
+                        <span className="text-[12px] text-muted">{o.stage}</span>
+                      </div>
+                      <div className="mt-1 truncate text-[13px] text-muted">{o.products.map((p) => PRODUCT[p].name).join(', ')}</div>
+                    </div>
+                    <span className="tabular shrink-0 text-[15px] text-ink">{money(o.arr)}</span>
                   </li>
                 ))}
               </ul>
-            ) : <div className="p-4 text-sm text-muted">None yet.</div>}
+            ) : (
+              <div className="px-5 pb-3 pt-2 text-[14px] text-muted">No opportunities yet.</div>
+            )}
           </Card>
 
           <Card title="Activity">
-            <form className="mb-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); if (note.trim()) { log(a.id, 'Note', note.trim()); setNote('') } }}>
-              <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={`Add a note as ${CURRENT_USER}…`} className="h-8 flex-1 rounded-md border border-line bg-surface px-2 text-sm outline-none focus:border-accent" />
-              <Button type="submit" size="md">Add</Button>
+            <form
+              className="mb-4 flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (note.trim()) {
+                  log(a.id, 'Note', note.trim())
+                  setNote('')
+                }
+              }}
+            >
+              <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={`Add a note as ${CURRENT_USER}`} aria-label="Note" className={`${inputClass} min-w-0 flex-1`} />
+              <Button type="submit" size="md">
+                Add note
+              </Button>
             </form>
-            <ul className="flex flex-col gap-2">
+            <ul className="flex flex-col gap-3">
               {acts.slice(0, 12).map((x) => (
-                <li key={x.id} className="text-sm">
+                <li key={x.id} className="text-[14px]">
                   <div className="text-ink">{x.text}</div>
-                  <div className="text-[11px] text-muted">{x.kind} · {x.author} · {relDays(x.date)}</div>
+                  <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-muted">
+                    <span>{x.kind}</span>
+                    <span>{x.author}</span>
+                    <span className="meta">{relDays(x.date)}</span>
+                  </div>
                 </li>
               ))}
-              {!acts.length && <li className="text-sm text-muted">No activity yet.</li>}
+              {!acts.length && <li className="text-[14px] text-muted">No activity yet. Add a note to start the record.</li>}
             </ul>
-            {mails.length > 0 && <Link to={`/outreach?account=${a.id}`} className="mt-3 block text-xs font-medium text-accent">{mails.length} outreach messages →</Link>}
+            {mails.length > 0 && (
+              <Link to={`/outreach?account=${a.id}`} className="mt-4 inline-block">
+                <TextLink>See {mails.length} outreach messages</TextLink>
+              </Link>
+            )}
           </Card>
         </div>
       </div>

@@ -23,8 +23,15 @@ export interface LucasReview {
 
 let statusPromise: Promise<{ ai: boolean; model: string; error?: string }> | null = null
 export function lucasStatus() {
+  if (import.meta.env.VITE_ARTIFACT) {
+    statusPromise ??= Promise.resolve({ ai: false, model: 'offline', error: 'Published demo link: Lucas runs on the playbook rules. Run the app locally with an API key for AI review.' })
+    return statusPromise
+  }
   statusPromise ??= fetch('/api/status')
     .then((r) => (r.ok ? r.json() : { ai: false, model: 'offline', error: `HTTP ${r.status}` }))
+    .then((st: { ai: boolean; model: string; error?: string }) =>
+      st.ai || !st.error || !/authentication|api.?key|credential/i.test(st.error) ? st : { ...st, error: 'No Anthropic API key is set on the server.' },
+    )
     .catch(() => ({ ai: false, model: 'offline', error: 'API server not reachable (static build?)' }))
   return statusPromise
 }
@@ -82,7 +89,8 @@ export function offlineReview(account: Account, contract: Contract, rep: string)
 
 export async function reviewContract(account: Account, contract: Contract, opp: Opportunity | undefined, rep: string): Promise<{ review: LucasReview; error?: string }> {
   const st = await lucasStatus()
-  if (!st.ai) return { review: offlineReview(account, contract, rep), error: st.error }
+  // Offline is an expected mode (no key, or the published demo), not an error; the status line already says so.
+  if (!st.ai) return { review: offlineReview(account, contract, rep) }
   try {
     const r = await fetch('/api/lucas/review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dealContext(account, contract, opp, rep)) })
     const json = await r.json()

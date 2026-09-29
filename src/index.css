@@ -1,73 +1,133 @@
 @import 'tailwindcss';
 
+/*
+  Layout concept: a black command rail frames a quiet white workspace. Big, light,
+  tightly tracked Instrument Sans headings; serif numerals for the figures that matter;
+  pill controls; lime used sparingly as the one signal color.
+*/
 @theme {
-  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --color-page: #f5f5f2;
-  --color-surface: #fcfcfb;
-  --color-surface-2: #f0efec;
-  --color-ink: #0b0b0b;
-  --color-ink-2: #52514e;
-  --color-muted: #898781;
-  --color-line: #e1e0d9;
-  --color-line-strong: #c3c2b7;
-  --color-accent: #256abf;
-  --color-accent-soft: #e3eefc;
+  --font-sans: 'Instrument Sans', 'Helvetica Neue', Arial, system-ui, sans-serif;
+  --font-serif: 'Instrument Serif', 'Times New Roman', Georgia, serif;
+  --font-mono: 'Fragment Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  --radius-card: 20px;
+  --radius-field: 12px;
+
+  /* Brand */
+  --color-black: #000000;
+  --color-white: #ffffff;
+  --color-lime: #c7ff9f;
+  --color-on-lime: #000000;
+
+  /* Surfaces & ink (light) */
+  --color-page: #f8f8f8;
+  --color-surface: #ffffff;
+  --color-surface-2: #f4f4f4;
+  --color-ink: #000000;
+  --color-ink-2: #555555;
+  --color-muted: #696969;
+  --color-line: rgb(0 0 0 / 0.08);
+  --color-line-strong: rgb(0 0 0 / 0.22);
+
+  /* Interactive: black ink on white, like the reference's pills */
+  --color-accent: #000000;
+  --color-on-accent: #ffffff;
+  --color-accent-soft: rgb(0 0 0 / 0.05);
+  --color-accent-soft-2: rgb(0 0 0 / 0.1);
+
+  /* Rail (always dark) */
+  --color-rail: #000000;
+  --color-rail-ink: #ffffff;
+  --color-rail-muted: rgb(255 255 255 / 0.55);
+  --color-rail-line: rgb(255 255 255 / 0.12);
+
+  /* Status (fixed, always paired with an icon + label) */
   --color-good: #0ca30c;
-  --color-good-text: #006300;
-  --color-warning: #fab219;
+  --color-good-text: #0a7a0a;
+  --color-warning: #e9a100;
   --color-serious: #ec835a;
   --color-critical: #d03b3b;
-  --color-tier1: #104281;
-  --color-tier2: #256abf;
-  --color-tier3: #5598e7;
-  --color-tier4: #86b6ef;
-  --color-seq-1: #cde2fb;
-  --color-seq-2: #9ec5f4;
-  --color-seq-3: #5598e7;
-  --color-seq-4: #256abf;
-  --color-seq-5: #104281;
+
+  /* Sequential: neutral, light -> black */
+  --color-seq-1: #e9e9e9;
+  --color-seq-2: #c4c4c4;
+  --color-seq-3: #8f8f8f;
+  --color-seq-4: #4d4d4d;
+  --color-seq-5: #000000;
+
+  /* Weather risk: warm ramp */
   --color-warm-1: #fde0d2;
   --color-warm-2: #f7b499;
   --color-warm-3: #eb6834;
   --color-warm-4: #c24f1f;
   --color-warm-5: #8f3712;
-  --color-cat-1: #2a78d6;
-  --color-cat-2: #eb6834;
-  --color-cat-3: #1baf7a;
+
+  /* Map markers: hog = lime, cattle = white; both ringed in ink */
+  --color-cat-1: #000000;
+  --color-cat-2: #c7ff9f;
+  --color-cat-3: #ffffff;
+  --color-marker-ring: #000000;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --color-page: #0d0d0d;
-    --color-surface: #1a1a19;
-    --color-surface-2: #242423;
+    --color-page: #000000;
+    --color-surface: #121212;
+    --color-surface-2: #252525;
     --color-ink: #ffffff;
-    --color-ink-2: #c3c2b7;
-    --color-muted: #898781;
-    --color-line: #2c2c2a;
-    --color-line-strong: #383835;
-    --color-accent: #5598e7;
-    --color-accent-soft: #16263b;
-    --color-good-text: #0ca30c;
-    --color-tier1: #cde2fb;
-    --color-tier2: #86b6ef;
-    --color-tier3: #3987e5;
-    --color-tier4: #1c5cab;
-    --color-seq-1: #184f95;
-    --color-seq-2: #1c5cab;
-    --color-seq-3: #2a78d6;
-    --color-seq-4: #6da7ec;
-    --color-seq-5: #b7d3f6;
+    --color-ink-2: rgb(255 255 255 / 0.72);
+    --color-muted: rgb(255 255 255 / 0.5);
+    --color-line: rgb(255 255 255 / 0.1);
+    --color-line-strong: rgb(255 255 255 / 0.28);
+    --color-accent: #ffffff;
+    --color-on-accent: #000000;
+    --color-accent-soft: rgb(255 255 255 / 0.08);
+    --color-accent-soft-2: rgb(255 255 255 / 0.16);
+    --color-good-text: #3fcf3f;
+    --color-seq-1: #2a2a2a;
+    --color-seq-2: #4a4a4a;
+    --color-seq-3: #7c7c7c;
+    --color-seq-4: #b8b8b8;
+    --color-seq-5: #ffffff;
     --color-warm-1: #5a2410;
     --color-warm-2: #8f3712;
     --color-warm-3: #d95926;
     --color-warm-4: #f08a5f;
     --color-warm-5: #f9c4ad;
-    --color-cat-1: #3987e5;
-    --color-cat-2: #d95926;
-    --color-cat-3: #199e70;
+    --color-cat-1: #ffffff;
+    --color-cat-3: #121212;
+    --color-marker-ring: #ffffff;
     color-scheme: dark;
   }
+}
+:root[data-theme='dark'] {
+  --color-page: #000000;
+  --color-surface: #121212;
+  --color-surface-2: #252525;
+  --color-ink: #ffffff;
+  --color-ink-2: rgb(255 255 255 / 0.72);
+  --color-muted: rgb(255 255 255 / 0.5);
+  --color-line: rgb(255 255 255 / 0.1);
+  --color-line-strong: rgb(255 255 255 / 0.28);
+  --color-accent: #ffffff;
+  --color-on-accent: #000000;
+  --color-accent-soft: rgb(255 255 255 / 0.08);
+  --color-accent-soft-2: rgb(255 255 255 / 0.16);
+  --color-good-text: #3fcf3f;
+  --color-seq-1: #2a2a2a;
+  --color-seq-2: #4a4a4a;
+  --color-seq-3: #7c7c7c;
+  --color-seq-4: #b8b8b8;
+  --color-seq-5: #ffffff;
+  --color-warm-1: #5a2410;
+  --color-warm-2: #8f3712;
+  --color-warm-3: #d95926;
+  --color-warm-4: #f08a5f;
+  --color-warm-5: #f9c4ad;
+  --color-cat-1: #ffffff;
+  --color-cat-3: #121212;
+  --color-marker-ring: #ffffff;
+  color-scheme: dark;
 }
 
 html,
@@ -79,13 +139,61 @@ body {
   background: var(--color-page);
   color: var(--color-ink);
   font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+h1,
+h2,
+h3 {
+  text-wrap: balance;
 }
 .tabular {
   font-variant-numeric: tabular-nums;
 }
-input[type='range'] {
+/* Display heading: large, light, tightly tracked (reference: 45px / 400 / -0.03em) */
+.display {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+}
+/* Serif figures for the numbers that matter */
+.figure {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  font-variant-numeric: lining-nums;
+}
+.meta {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+input[type='range'],
+input[type='checkbox'] {
   accent-color: var(--color-accent);
+}
+:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+.rail :focus-visible {
+  outline-color: var(--color-lime);
+}
+::selection {
+  background: var(--color-lime);
+  color: #000;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
 @media print {
   aside,

@@ -46,7 +46,8 @@ export function rankOpportunities(
       const age = -daysFrom(s.date)
       if (age > 90) continue
       intent += INTENT_W[s.type] * (1 - age / 120)
-      if (reasons.length < 2) reasons.push(`${s.type}: ${s.headline}`)
+      const why = `${s.type}: ${s.headline}`
+      if (reasons.length < 2 && !reasons.includes(why)) reasons.push(why)
     }
     intent = clamp(intent)
 

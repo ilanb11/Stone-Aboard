@@ -1,16 +1,19 @@
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { ArrowUpDown, Download } from 'lucide-react'
+import { AlertOctagon, ArrowDown, ArrowUp, ArrowUpDown, Copy, Download } from 'lucide-react'
 import { useBook, signalsByAccount } from '../lib/useData'
 import { STATE_LIST } from '../data/geo'
 import { TEAM } from '../data/generate'
 import type { Account, Segment } from '../types'
-import { Button, Chip, HealthBadge, PageHeader, Select, StatusBadge, TextInput, WeatherBadge } from '../components/ui'
-import { downloadCsv, money, num, relDays } from '../lib/format'
+import { Button, Chip, HealthBadge, Notice, PageHeader, Select, StatusBadge, TextInput, WeatherBadge } from '../components/ui'
+import { downloadCsv, isFramed, money, num, relDays } from '../lib/format'
 import { mrr } from '../lib/pricing'
 
 const SEGMENTS: Segment[] = ['Sow Farm', 'Wean-to-Finish', 'Farrow-to-Finish', 'Contract Finisher', 'Integrated System', 'Cow-Calf', 'Stocker / Backgrounder', 'Feedlot', 'Dairy']
 type SortKey = 'name' | 'head' | 'arr' | 'health' | 'weather' | 'signal'
+
+const td = 'px-4 py-3 align-top first:pl-5 last:pr-5'
+const none = <span className="text-muted">—</span>
 
 export default function Accounts() {
   const book = useBook()
@@ -23,6 +26,8 @@ export default function Accounts() {
   const [rep, setRep] = useState('All')
   const [sort, setSort] = useState<{ k: SortKey; d: 1 | -1 }>({ k: 'arr', d: -1 })
   const [page, setPage] = useState(0)
+  const [flash, setFlash] = useState<{ text: string; error?: boolean } | null>(null)
+  const framed = isFramed()
 
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase()
@@ -53,17 +58,34 @@ export default function Accounts() {
 
   const PAGE = 50
   const pageRows = rows.slice(page * PAGE, page * PAGE + PAGE)
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE))
   const reset = () => setPage(0)
+  const toast = (text: string, error = false) => {
+    setFlash({ text, error })
+    setTimeout(() => setFlash(null), error ? 4000 : 2500)
+  }
 
-  const Th = ({ k, children, right }: { k?: SortKey; children: React.ReactNode; right?: boolean }) => (
-    <th className={`whitespace-nowrap px-3 py-2 text-xs font-medium text-ink-2 ${right ? 'text-right' : 'text-left'}`}>
-      {k ? (
-        <button className={`inline-flex items-center gap-1 hover:text-ink ${sort.k === k ? 'text-ink' : ''}`} onClick={() => setSort((s) => ({ k, d: s.k === k ? (-s.d as 1 | -1) : k === 'name' ? 1 : -1 }))}>
-          {children} <ArrowUpDown size={12} className={sort.k === k ? 'text-accent' : 'text-muted'} />
-        </button>
-      ) : children}
-    </th>
-  )
+  const exportCsv = async () => {
+    const result = await downloadCsv('accounts.csv', [['ID', 'Name', 'Species', 'Segment', 'County', 'State', 'Head', 'Sites', 'Barns', 'Status', 'ARR', 'Rep', 'Integrator/Packer', 'Parent'], ...rows.map((a) => [a.id, a.name, a.species, a.segment, a.county, a.state, a.headCount, a.sites, a.barns, a.status, Math.round(mrr(a) * 12), a.rep, a.integrator ?? '', a.parentCompany ?? ''])])
+    if (result === 'copied') toast('Copied to clipboard')
+    else if (result === 'failed') toast("Couldn't copy. Allow clipboard access in your browser and try again.", true)
+  }
+
+  // Render helper, not a component: a component defined in render remounts every
+  // header cell on each sort, which drops keyboard focus from the sort button.
+  const th = (label: string, k?: SortKey, right?: boolean) => {
+    const active = !!k && sort.k === k
+    const Icon = active ? (sort.d === 1 ? ArrowUp : ArrowDown) : ArrowUpDown
+    return (
+      <th key={label} className={`whitespace-nowrap px-4 py-3 text-[13px] font-normal text-muted first:pl-5 last:pr-5 ${right ? 'text-right' : 'text-left'}`} aria-sort={active ? (sort.d === 1 ? 'ascending' : 'descending') : undefined}>
+        {k ? (
+          <button type="button" className={`inline-flex items-center gap-1.5 transition-colors hover:text-ink ${active ? 'text-ink' : ''}`} onClick={() => setSort((s) => ({ k, d: s.k === k ? (-s.d as 1 | -1) : k === 'name' ? 1 : -1 }))}>
+            {label} <Icon size={12} className={active ? 'text-ink' : 'text-muted'} aria-hidden />
+          </button>
+        ) : label}
+      </th>
+    )
+  }
 
   return (
     <div>
@@ -71,13 +93,23 @@ export default function Accounts() {
         title="Accounts"
         subtitle="Every hog and cattle operation we sell to or want to sell to."
         actions={
-          <Button onClick={() => downloadCsv('accounts.csv', [['ID', 'Name', 'Species', 'Segment', 'County', 'State', 'Head', 'Sites', 'Barns', 'Status', 'ARR', 'Rep', 'Integrator/Packer', 'Parent'], ...rows.map((a) => [a.id, a.name, a.species, a.segment, a.county, a.state, a.headCount, a.sites, a.barns, a.status, Math.round(mrr(a) * 12), a.rep, a.integrator ?? '', a.parentCompany ?? ''])])}>
-            <Download size={14} /> Export CSV
+          <Button onClick={exportCsv}>
+            {framed ? <Copy size={14} /> : <Download size={14} />} {framed ? 'Copy as CSV' : 'Export CSV'}
           </Button>
         }
       />
-      <div className="grid grid-cols-2 gap-3 rounded-xl border border-line bg-surface p-4 md:grid-cols-4 xl:grid-cols-7">
-        <TextInput className="col-span-2 md:col-span-1 xl:col-span-2" label="Search" value={q} onChange={(v) => { setQ(v); reset() }} placeholder="Name, contact, integrator…" />
+      {flash &&
+        (flash.error ? (
+          <div role="alert" className="mb-4 flex items-start gap-2.5 rounded-[14px] bg-accent-soft px-4 py-3 text-[14px] text-ink">
+            <AlertOctagon size={14} strokeWidth={2.25} className="mt-[3px] shrink-0 text-critical" aria-hidden />
+            <span className="min-w-0">{flash.text}</span>
+          </div>
+        ) : (
+          <Notice>{flash.text}</Notice>
+        ))}
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+        <TextInput className="col-span-2 md:col-span-1 xl:col-span-2" label="Search" value={q} onChange={(v) => { setQ(v); reset() }} placeholder="Name, contact or integrator" />
         <Select label="Species" value={species} onChange={(v) => { setSpecies(v); reset() }} options={['All', 'Hog', 'Cattle']} />
         <Select label="Segment" value={segment} onChange={(v) => { setSegment(v); reset() }} options={['All', ...SEGMENTS]} />
         <Select label="Status" value={status} onChange={(v) => { setStatus(v); reset() }} options={['All', 'Customer', 'Prospect', 'Churned']} />
@@ -85,62 +117,85 @@ export default function Accounts() {
         <Select label="Rep" value={rep} onChange={(v) => { setRep(v); reset() }} options={['All', ...TEAM]} />
       </div>
 
-      <div className="mt-3 flex items-center justify-between text-sm text-ink-2">
-        <span><b className="font-semibold text-ink">{num(rows.length)}</b> accounts · {money(rows.reduce((s, a) => s + mrr(a) * 12, 0))} ARR</span>
-        <div className="flex items-center gap-2 text-xs">
-          <Button size="sm" disabled={page === 0} onClick={() => setPage(page - 1)}>Prev</Button>
-          <span className="tabular">Page {page + 1} / {Math.max(1, Math.ceil(rows.length / PAGE))}</span>
+      <div className="mt-5 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+        <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1">
+          <span className="flex items-baseline gap-2">
+            <span className="figure text-[32px] text-ink">{num(rows.length)}</span>
+            <span className="text-[14px] text-ink-2">accounts</span>
+          </span>
+          <span className="flex items-baseline gap-2">
+            <span className="figure text-[32px] text-ink">{money(rows.reduce((s, a) => s + mrr(a) * 12, 0))}</span>
+            <span className="text-[14px] text-ink-2">ARR</span>
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</Button>
+          <span className="tabular px-1 text-[13px] text-ink-2">Page {page + 1} of {pages}</span>
           <Button size="sm" disabled={(page + 1) * PAGE >= rows.length} onClick={() => setPage(page + 1)}>Next</Button>
         </div>
       </div>
 
-      <div className="mt-2 overflow-x-auto rounded-xl border border-line bg-surface">
-        <table className="w-full min-w-[1150px] text-sm">
-          <thead className="border-b border-line">
+      <div className="mt-4 overflow-x-auto rounded-[var(--radius-card)] border border-line bg-surface">
+        <table className="w-full min-w-[1150px] text-[14px]">
+          <thead>
             <tr>
-              <Th k="name">Account</Th>
-              <Th>Segment</Th>
-              <Th k="head" right>Head</Th>
-              <Th right>Sites / barns</Th>
-              <Th>Status</Th>
-              <Th k="arr" right>ARR</Th>
-              <Th k="health">Health</Th>
-              <Th k="weather">Weather (7d)</Th>
-              <Th>Pricing</Th>
-              <Th k="signal">Latest signal</Th>
-              <Th>Rep</Th>
+              {th('Account', 'name')}
+              {th('Segment')}
+              {th('Head', 'head', true)}
+              {th('Sites / barns', undefined, true)}
+              {th('Status')}
+              {th('ARR', 'arr', true)}
+              {th('Health', 'health')}
+              {th('Weather (7d)', 'weather')}
+              {th('Pricing')}
+              {th('Latest signal', 'signal')}
+              {th('Rep')}
             </tr>
           </thead>
-          <tbody className="divide-y divide-line">
+          <tbody>
             {pageRows.map((a) => {
               const sig = signalsByAccount[a.id]?.[0]
               const p = book.pricing[a.id]
               return (
-                <tr key={a.id} className="hover:bg-surface-2/60">
-                  <td className="px-3 py-2">
-                    <Link to={`/accounts/${a.id}`} className="font-medium text-ink hover:text-accent">{a.name}</Link>
-                    <div className="text-xs text-muted">{a.county} Co., {a.state}{a.integrator ? ` · ${a.integrator}` : ''}</div>
+                <tr key={a.id} className="border-t border-line hover:bg-accent-soft/60">
+                  <td className={`${td} min-w-[240px]`}>
+                    <Link to={`/accounts/${a.id}`} className="font-medium text-ink underline-offset-4 hover:underline">{a.name}</Link>
+                    <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-muted">
+                      <span>{a.county} Co., {a.state}</span>
+                      {a.integrator && <span>{a.integrator}</span>}
+                    </div>
                   </td>
-                  <td className="px-3 py-2"><span className="text-ink">{a.segment}</span><div className="text-xs text-muted">{a.species}</div></td>
-                  <td className="tabular px-3 py-2 text-right">{num(a.headCount)}</td>
-                  <td className="tabular px-3 py-2 text-right">{a.sites} / {a.barns}</td>
-                  <td className="px-3 py-2"><Chip tone={a.status === 'Customer' ? 'accent' : a.status === 'Churned' ? 'dim' : 'neutral'}>{a.status}</Chip></td>
-                  <td className="tabular px-3 py-2 text-right">{a.status === 'Customer' ? money(mrr(a) * 12) : '—'}</td>
-                  <td className="px-3 py-2"><HealthBadge h={book.health[a.id]} /></td>
-                  <td className="px-3 py-2">{a.status === 'Customer' ? <WeatherBadge w={book.weatherRisk[a.id]} compact /> : <span className="text-xs text-muted">—</span>}</td>
-                  <td className="px-3 py-2">
-                    {p ? <StatusBadge tone={p.status === 'Under-priced' ? 'warning' : p.status === 'Over-priced' ? 'serious' : 'good'}>{p.status}</StatusBadge> : <span className="text-xs text-muted">—</span>}
+                  <td className={`${td} whitespace-nowrap`}>
+                    <span className="text-ink">{a.segment}</span>
+                    <div className="mt-0.5 text-[12px] text-muted">{a.species}</div>
                   </td>
-                  <td className="max-w-64 px-3 py-2">
-                    {sig ? <><div className="truncate text-xs text-ink">{sig.headline}</div><div className="text-[11px] text-muted">{sig.type} · {relDays(sig.date)}</div></> : <span className="text-xs text-muted">—</span>}
+                  <td className={`${td} tabular text-right text-ink`}>{num(a.headCount)}</td>
+                  <td className={`${td} tabular text-right text-ink`}>{a.sites} / {a.barns}</td>
+                  <td className={td}><Chip tone={a.status === 'Customer' ? 'accent' : a.status === 'Churned' ? 'dim' : 'neutral'}>{a.status}</Chip></td>
+                  <td className={`${td} tabular text-right text-ink`}>{a.status === 'Customer' ? money(mrr(a) * 12) : none}</td>
+                  <td className={td}><HealthBadge h={book.health[a.id]} /></td>
+                  <td className={td}>{a.status === 'Customer' ? <WeatherBadge w={book.weatherRisk[a.id]} compact /> : none}</td>
+                  <td className={td}>
+                    {p ? <StatusBadge tone={p.status === 'Under-priced' ? 'warning' : p.status === 'Over-priced' ? 'serious' : 'good'}>{p.status}</StatusBadge> : none}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs text-ink-2">{a.rep}</td>
+                  <td className={`${td} max-w-64`}>
+                    {sig ? (
+                      <>
+                        <div className="truncate text-[13px] text-ink">{sig.headline}</div>
+                        <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-muted">
+                          <span>{sig.type}</span>
+                          <span className="meta">{relDays(sig.date)}</span>
+                        </div>
+                      </>
+                    ) : none}
+                  </td>
+                  <td className={`${td} whitespace-nowrap text-[13px] text-ink-2`}>{a.rep}</td>
                 </tr>
               )
             })}
           </tbody>
         </table>
-        {!pageRows.length && <div className="p-8 text-center text-sm text-muted">No accounts match.</div>}
+        {!pageRows.length && <div className="border-t border-line px-5 py-10 text-center text-[14px] text-muted">No accounts match these filters. Clear the search or set a filter back to All.</div>}
       </div>
     </div>
   )

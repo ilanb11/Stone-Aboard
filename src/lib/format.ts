@@ -33,15 +33,40 @@ export function initials(name: string) {
     .slice(0, 2)
 }
 
+/** True when running inside a sandboxed frame (the published link), where downloads are blocked. */
+export function isFramed(): boolean {
+  try {
+    return window.self !== window.top
+  } catch {
+    return true
+  }
+}
+
+/**
+ * Save text as a file. Inside a sandboxed frame downloads are inert, so the text
+ * is copied to the clipboard instead. Returns what happened so the UI can say so.
+ */
+export async function saveText(filename: string, text: string, type = 'text/plain'): Promise<'downloaded' | 'copied' | 'failed'> {
+  if (isFramed()) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return 'copied'
+    } catch {
+      return 'failed'
+    }
+  }
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([text], { type }))
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(a.href)
+  return 'downloaded'
+}
+
 export function downloadCsv(filename: string, rows: (string | number)[][]) {
   const esc = (v: string | number) => {
     const s = String(v ?? '')
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
   }
-  const blob = new Blob([rows.map((r) => r.map(esc).join(',')).join('\n')], { type: 'text/csv' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(a.href)
+  return saveText(filename, rows.map((r) => r.map(esc).join(',')).join('\n'), 'text/csv')
 }
