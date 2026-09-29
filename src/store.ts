@@ -11,6 +11,47 @@ import type { LucasReview } from './lib/lucas'
 export const dataset = generateDataset()
 export const CURRENT_USER = 'Avery Collins'
 
+// ---------- persisted-state migration ----------
+// Stage names before the six-stage pipeline (seed version 13 and earlier).
+const LEGACY_STAGES: Record<string, OppStage> = { Identified: 'Prospect', Qualified: 'Demo', Proposal: 'Demo' }
+export const migrateStage = (s: string): OppStage => LEGACY_STAGES[s] ?? (s as OppStage)
+
+type Persisted = Pick<CrmState, 'accounts' | 'contracts' | 'opportunities' | 'outreach' | 'activities'> & Record<string, unknown>
+
+/** Append seed records the saved state doesn't have yet (matched by id). */
+function mergeById<T extends { id: string }>(saved: T[], seed: T[]): T[] {
+  const have = new Set(saved.map((x) => x.id))
+  return [...saved, ...seed.filter((x) => !have.has(x.id))]
+}
+
+/**
+ * v13 -> v14 keeps the user's saved work: renames old stages and adds the new seed
+ * records (field-crop accounts, closed and on-ice deals). Anything older is reseeded.
+ */
+function migrateState(persisted: unknown, version: number) {
+  const p = persisted as Partial<Persisted> | undefined
+  if (!p?.accounts || !p.opportunities || version < 13) return initial()
+  const seedAccount = Object.fromEntries(dataset.accounts.map((a) => [a.id, a]))
+  const accounts = mergeById(
+    p.accounts.map((a) => {
+      // The v14 seed turned a few prospects with a won deal into customers; take that fix
+      // unless the user already has a contract on the account.
+      const s = seedAccount[a.id]
+      return s && a.status === 'Prospect' && s.status === 'Customer' && !a.contractId ? { ...a, status: s.status, subscriptions: s.subscriptions, contractId: s.contractId, health: s.health, competitor: undefined, competitorRenewal: undefined } : a
+    }),
+    dataset.accounts,
+  )
+  return {
+    ...initial(),
+    ...p,
+    accounts,
+    contracts: mergeById(p.contracts ?? [], dataset.contracts),
+    opportunities: mergeById(p.opportunities.map((o) => ({ ...o, stage: migrateStage(o.stage) })), dataset.opportunities),
+    outreach: mergeById(p.outreach ?? [], dataset.outreach),
+    activities: mergeById(p.activities ?? [], dataset.activities),
+  }
+}
+
 export type Decision = 'Pending' | 'Accept' | 'Counter' | 'Reject'
 export interface RedlineDecision {
   decision: Decision
@@ -123,7 +164,7 @@ export const useCrm = create<CrmState>()(
       name: 'herdbook-crm',
       version: SEED_VERSION,
       storage: createJSONStorage(() => localStorage),
-      migrate: () => initial() as unknown as CrmState,
+      migrate: (persisted, version) => migrateState(persisted, version) as unknown as CrmState,
       partialize: (s) => ({ accounts: s.accounts, contracts: s.contracts, opportunities: s.opportunities, outreach: s.outreach, activities: s.activities, reviews: s.reviews, decisions: s.decisions, chats: s.chats, autoSend: s.autoSend, priceProposals: s.priceProposals }),
     },
   ),

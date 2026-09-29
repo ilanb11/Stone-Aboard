@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { BadgeDollarSign, CloudSun, FileSignature, Flame, LayoutDashboard, Map as MapIcon, Menu, Newspaper, Search, Send, Users, X } from 'lucide-react'
+import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { BadgeDollarSign, FileSignature, Flame, LayoutDashboard, Map as MapIcon, Menu, Newspaper, Search, Send, Users, X } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import HeatMap from './pages/HeatMap'
 import Accounts from './pages/Accounts'
@@ -11,7 +11,6 @@ import OutreachPage from './pages/Outreach'
 import Pricing from './pages/Pricing'
 import Contracts from './pages/Contracts'
 import LucasWorkspace from './pages/LucasWorkspace'
-import Weather from './pages/Weather'
 import { CURRENT_USER, useCrm } from './store'
 import { initials } from './lib/format'
 
@@ -23,8 +22,7 @@ const NAV = [
   { to: '/signals', label: 'Signals and newsletter', icon: Newspaper },
   { to: '/outreach', label: 'Automated outreach', icon: Send },
   { to: '/pricing', label: 'Pricing', icon: BadgeDollarSign },
-  { to: '/contracts', label: 'Contracts and Lucas', icon: FileSignature },
-  { to: '/weather', label: 'Weather and health', icon: CloudSun },
+  { to: '/contracts', label: 'Lucas the Hog', icon: FileSignature },
 ]
 
 function GlobalSearch() {
@@ -102,7 +100,7 @@ export default function App() {
           </span>
           <div className="leading-none">
             <div className="text-[20px] tracking-[-0.03em]">Herdbook</div>
-            <div className="mt-1 text-[12px] text-rail-muted">ThiboLiSoft for hog and cattle</div>
+            <div className="mt-1 text-[12px] text-rail-muted">ThiboLiSoft for hog, cattle and field crops</div>
           </div>
           <button className="ml-auto rounded-full p-1 text-rail-muted hover:text-rail-ink lg:hidden" onClick={() => setMenu(false)} aria-label="Close menu">
             <X size={18} />
@@ -153,7 +151,8 @@ export default function App() {
               <Route path="/pricing" element={<Pricing />} />
               <Route path="/contracts" element={<Contracts />} />
               <Route path="/contracts/:id" element={<LucasWorkspace />} />
-              <Route path="/weather" element={<Weather />} />
+              {/* Old links (for example the removed /weather tab) land on the dashboard. */}
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </div>
         </main>

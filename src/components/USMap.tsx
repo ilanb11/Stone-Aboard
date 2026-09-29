@@ -26,6 +26,8 @@ export interface MapPoint {
   lat: number
   color: string
   r: number
+  /** Outline colour; defaults to the ink marker ring. */
+  ring?: string
 }
 
 export function project(lon: number, lat: number): [number, number] | null {
@@ -99,7 +101,7 @@ export function USMap({
                 cy={p.y}
                 r={p.r}
                 fill={p.color}
-                stroke="var(--color-marker-ring)"
+                stroke={p.ring ?? 'var(--color-marker-ring)'}
                 strokeWidth={1}
                 className="cursor-pointer"
                 onClick={() => onPointClick?.(p.id)}

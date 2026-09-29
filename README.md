@@ -1,6 +1,6 @@
-# Herdbook CRM: ThiboLiSoft Hog & Cattle
+# Herdbook CRM: ThiboLiSoft for hog, cattle and field crops
 
-Hackathon CRM for selling ThiboLiSoft software and services to hog and cattle operations.
+Hackathon CRM for selling ThiboLiSoft software and services to hog, cattle and field-crop (grain) operations.
 
 ```bash
 npm install
@@ -13,21 +13,24 @@ To enable **Lucas the Hog** (Claude-powered contract agent) and AI outreach rewr
 
 | Page | What it does |
 |---|---|
-| Dashboard | ARR, pipeline, price-normalization upside, customers needing support, top-ranked opportunities |
-| Heat Map | State choropleth: hog/cattle inventory, white space, customers, ARR, penetration, pipeline, signals, weather risk |
-| Accounts / detail | Org structure (contacts, parent, integrator/packer), change history, subscriptions, pricing, contract, weather, activity |
+| Dashboard | ARR, open pipeline, recent wins, price-normalization upside, top-ranked opportunities, pipeline by stage |
+| Heat map | State choropleth for hogs, cattle or field crops: market size (head or crop acres), prospects, customers, ARR, penetration, pipeline, signals |
+| Accounts / detail | Org structure (contacts, parent, integrator, packer or grain marketing), change history, subscriptions, pricing, contract, activity |
 | Opportunities | Ranked by fit × intent (org changes) × timing (competitor/contract renewals) × relationship, weighted by ARR; plus a drag-and-drop board |
-| Signals & Newsletter | Feed of ownership, leadership, expansion, integrator, biosecurity, regulatory and financial changes; weekly "Hog & Herd Brief" |
-| Automated Outreach | Playbook-driven drafts triggered by signals and weather; approve/skip/AI-rewrite; per-playbook auto-send (simulated, no email is sent) |
+| Signals and newsletter | Feed of ownership, leadership, expansion, integrator, animal and crop health, regulatory and financial changes; weekly "Hog, Herd & Field Brief" |
+| Automated outreach | Playbook-driven drafts triggered by signals; approve/skip/AI-rewrite; per-playbook auto-send (simulated, no email is sent) |
 | Pricing | Each customer vs. its normal discount band, checked against its contract's price clause (CPI escalator, annual cap, fixed term, lock, renewal notice window, MFN exposure) |
-| Contracts · Lucas | Redline review against the MSA playbook (accept/counter/reject + ready-to-paste language), concession plan, reply email, chat, export counter-redline, mark signed |
-| Weather & Health | Live 7-day Open-Meteo forecast per state → THI heat stress, cold/blizzard, heavy rain (lagoons), dry pasture; combined with usage/tickets/payments/NPS |
+| Lucas the Hog | Contracts and redline review against the MSA playbook (accept/counter/reject + ready-to-paste language), concession plan, reply email, chat, export counter-redline, mark signed |
+
+## Pipeline stages
+
+One shared constant, `OPP_STAGES` in `src/types.ts`: **Prospect → Demo → Negotiation → Closed Won → Closed Lost → On Ice**. Prospect, Demo and Negotiation are the open pipeline (`OPEN_OPP_STAGES`); On Ice is parked, neither open nor closed. Browser data saved under the old stage names (Identified, Qualified, Proposal) is migrated on load (`src/store.ts`).
 
 ## Architecture
 
-- `src/data/`: seeded synthetic data (`generate.ts`), state inventories (`geo.ts`), product catalog, MSA clauses + negotiation playbook (`contracts.ts`)
-- `src/lib/`: pricing engine, opportunity ranking and health scoring, weather risk, outreach playbooks, Lucas client
+- `src/data/`: seeded synthetic data (`generate.ts`: hog and cattle pass, stage-spread pass and field-crops pass, each on its own random stream), state inventories and crop acres (`geo.ts`), product catalog, MSA clauses + negotiation playbook (`contracts.ts`)
+- `src/lib/`: pricing engine, opportunity ranking, outreach playbooks, Lucas client, and the Open-Meteo weather integration (`weather.ts`, not shown on any page right now; kept for the newsletter)
 - `server/lucas.ts`: Vite dev-server middleware for `/api/lucas/review` (structured output), `/api/lucas/chat` (streaming) and `/api/ai/outreach`, using `claude-opus-5-5` with server-side refusal fallback
 - `src/store.ts`: Zustand store persisted to localStorage (swap for a real backend or Salesforce sync)
 
-All accounts, contacts, signals and contracts are synthetic. State inventories are indicative (roughly USDA NASS scale). Weather is live when Open-Meteo is reachable and falls back to a modeled forecast when it isn't.
+All accounts, contacts, signals and contracts are synthetic. State inventories and crop acres are indicative (roughly USDA NASS scale).

@@ -11,7 +11,7 @@ const MODEL = 'claude-opus-5-5'
 
 const PLAYBOOK = CLAUSES.map((c) => `${c.number}. ${c.title}\n   Template: ${c.text}\n   Standard: ${c.playbook.standard}\n   Fallback: ${c.playbook.fallback}\n   Walk-away: ${c.playbook.walkAway}`).join('\n\n')
 
-const LUCAS_SYSTEM = `You are Lucas the Hog, ThiboLiSoft's deal-desk and contracts agent. ThiboLiSoft sells farm-management software, IoT barn sensors and advisory services to hog and cattle operations: sow farms, wean-to-finish and contract finishers, integrated pork systems, cow-calf ranches, stockers, feedlots and dairies. You help sales reps close deals by reviewing customer redlines to our Master Subscription Agreement against the negotiation playbook below.
+const LUCAS_SYSTEM = `You are Lucas the Hog, ThiboLiSoft's deal-desk and contracts agent. ThiboLiSoft sells farm-management software, IoT barn and grain-bin sensors and advisory services to hog, cattle and field-crop operations: sow farms, wean-to-finish and contract finishers, integrated pork systems, cow-calf ranches, stockers, feedlots, dairies, and corn, soybean, wheat and irrigated row-crop farms. You help sales reps close deals by reviewing customer redlines to our Master Subscription Agreement against the negotiation playbook below.
 
 How to judge each redline:
 - Accept when the change sits inside our standard or fallback position, or costs little and builds goodwill (swine biosecurity requirements are a good example).
@@ -147,7 +147,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   if (url.startsWith('/api/ai/outreach')) {
     const { data } = await structured(
-      'You write short, specific sales and customer-success emails for ThiboLiSoft, a farm software company serving hog and cattle operations. Write like a trusted rep who knows farming: plain, warm, no hype, under 140 words, one clear ask. Never invent facts beyond the context. Keep the sign-off from the draft.',
+      'You write short, specific sales and customer-success emails for ThiboLiSoft, a farm software company serving hog, cattle and field-crop operations. Write like a trusted rep who knows farming: plain, warm, no hype, under 140 words, one clear ask. Never invent facts beyond the context. Keep the sign-off from the draft.',
       `Rewrite this outreach so it is more personal and specific to the context.\n\n<context>\n${JSON.stringify(body, null, 2)}\n</context>`,
       OUTREACH_SCHEMA,
       'low',

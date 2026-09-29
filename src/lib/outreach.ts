@@ -15,7 +15,7 @@ export const PLAYBOOKS: Playbook[] = [
   { id: 'expansion', name: 'Expansion upsell', trigger: 'Expansion', roles: ['Operations', 'GM', 'Owner'], description: 'Offer to extend coverage (sites, barns, sensors) to the new capacity.' },
   { id: 'contraction', name: 'Right-size & retain', trigger: 'Contraction', roles: ['Owner', 'GM', 'CFO'], description: 'Proactive check-in to right-size the subscription before it churns.' },
   { id: 'integrator', name: 'Integrator change review', trigger: 'Integrator / Packer Change', roles: ['Owner', 'GM'], description: 'Review reporting and data-sharing setup for the new integrator or packer.' },
-  { id: 'biosecurity', name: 'Biosecurity support', trigger: 'Biosecurity', roles: ['Veterinarian', 'Barn Manager', 'Operations'], description: 'Share HealthWatch protocols and offer support during a disease event.' },
+  { id: 'biosecurity', name: 'Biosecurity support', trigger: 'Biosecurity', roles: ['Veterinarian', 'Agronomist', 'Barn Manager', 'Operations'], description: 'Share HealthWatch or AgronomyView support during an animal or crop disease event.' },
   { id: 'regulatory', name: 'Compliance readiness', trigger: 'Regulatory', roles: ['Operations', 'GM', 'Owner'], description: 'Invite to a TraceLink compliance briefing on the new rule.' },
   { id: 'financial', name: 'Financial event', trigger: 'Financial', roles: ['CFO', 'Owner'], description: 'Adapt terms or timing to the customer’s financial event.' },
   { id: 'weather-heat', name: 'Heat-stress protocol', trigger: 'Weather: heat', roles: ['Barn Manager', 'Operations', 'GM'], description: 'Send the heat-stress checklist and verify BarnSense alarm thresholds before the heat arrives.' },
@@ -58,24 +58,27 @@ export function draftForSignal(a: Account, s: Signal, rep: string): { playbook: 
   const hi = `Hi ${first(contact)},`
   const sig = `\n\nBest,\n${rep}\nThiboLiSoft`
   const ws = whitespace(a).map((p) => PRODUCT[p].name)
+  // Field-crop accounts get the same playbooks with crop wording; livestock copy is unchanged.
+  const grain = a.species === 'Grain'
+  const core = grain ? 'FieldTrack' : 'HerdTrack'
   let subject = ''
   let body = ''
   switch (s.type) {
     case 'Ownership Change':
       subject = customer ? `Continuity for ${a.name} under new ownership` : `Supporting ${a.name} through the transition`
       body = customer
-        ? `${hi}\n\nI saw the news: ${s.headline}. Congratulations. Nothing changes on your side: HerdTrack and your records keep running as usual.\n\nIt makes sense to review how the account is set up (users, sites and reporting) under the new structure. Could we find 30 minutes in the next two weeks?`
-        : `${hi}\n\nCongratulations on the recent news: ${s.headline}. Ownership changes are usually when teams standardize records and reporting across sites. We help ${a.segment.toLowerCase()} operations do that without adding work for barn staff.\n\nWould a short call to compare notes be useful?`
+        ? `${hi}\n\nI saw the news: ${s.headline}. Congratulations. Nothing changes on your side: ${core} and your records keep running as usual.\n\nIt makes sense to review how the account is set up (users, sites and reporting) under the new structure. Could we find 30 minutes in the next two weeks?`
+        : `${hi}\n\nCongratulations on the recent news: ${s.headline}. Ownership changes are usually when teams standardize records and reporting across sites. We help ${a.segment.toLowerCase()} operations do that without adding work for ${grain ? 'the field crew' : 'barn staff'}.\n\nWould a short call to compare notes be useful?`
       break
     case 'Leadership Change':
       subject = `Welcome to ${a.name}, and a quick hello from ThiboLiSoft`
       body = customer
         ? `${hi}\n\nCongratulations on the new role. ${a.name} has been running ThiboLiSoft for a while. I'd like to give you a 30-minute tour of how the team uses it today and hear your priorities for the next 12 months.\n\nDoes next week work?`
-        : `${hi}\n\nCongratulations on joining ${a.name}. New leaders often take a fresh look at how production data flows. We help operations like yours cut closeout time and catch issues earlier.\n\nOpen to a 20-minute intro?`
+        : `${hi}\n\nCongratulations on joining ${a.name}. ${grain ? 'New leaders often take a fresh look at how field and harvest data flows. We help farms like yours keep field records in one place and catch problems earlier.' : 'New leaders often take a fresh look at how production data flows. We help operations like yours cut closeout time and catch issues earlier.'}\n\nOpen to a 20-minute intro?`
       break
     case 'Expansion':
       subject = `Coverage for ${a.name}'s new capacity`
-      body = `${hi}\n\nCongratulations on the expansion (${s.headline.toLowerCase()}). ${customer ? `To bring the new capacity onto your current setup from day one, I can put together a quote for the added sites${ws.length ? `, plus ${ws.slice(0, 2).join(' and ')}` : ''}.` : 'New barns are the easiest time to set up clean records and sensors from the start.'}\n\nWant me to send numbers this week?`
+      body = `${hi}\n\nCongratulations on the expansion (${s.headline.toLowerCase()}). ${customer ? `To bring the new capacity onto your current setup from day one, I can put together a quote for the added ${grain ? 'acres and bins' : 'sites'}${ws.length ? `, plus ${ws.slice(0, 2).join(' and ')}` : ''}.` : grain ? 'New ground and new bins are the easiest time to set up clean field records and monitoring from the start.' : 'New barns are the easiest time to set up clean records and sensors from the start.'}\n\nWant me to send numbers this week?`
       break
     case 'Contraction':
       subject = `Checking in: ${a.name}`
@@ -83,11 +86,11 @@ export function draftForSignal(a: Account, s: Signal, rep: string): { playbook: 
       break
     case 'Integrator / Packer Change':
       subject = `Setting up reporting for your new partner`
-      body = `${hi}\n\nI noticed ${s.headline.toLowerCase()}. We can set up closeout and compliance reports in the format your new partner expects, so the switch doesn't create extra paperwork.\n\nShall I send over the options?`
+      body = `${hi}\n\nI noticed ${s.headline.toLowerCase()}. We can set up ${grain ? 'delivery and settlement records' : 'closeout and compliance reports'} in the format your new partner expects, so the switch doesn't create extra paperwork.\n\nShall I send over the options?`
       break
     case 'Biosecurity':
-      subject = `Biosecurity support for ${a.name}`
-      body = `${hi}\n\nGiven ${s.headline.toLowerCase()}, I wanted to make sure you have what you need. ${customer ? 'HealthWatch can flag mortality and treatment trends across your sites daily, and our team can help set that up this week at no cost.' : 'Several operations nearby use HealthWatch to track mortality and treatments across sites. Happy to share how they handle it.'}\n\nLet me know if a quick call would help.`
+      subject = grain ? `Crop disease support for ${a.name}` : `Biosecurity support for ${a.name}`
+      body = `${hi}\n\nGiven ${s.headline.toLowerCase()}, I wanted to make sure you have what you need. ${grain ? (customer ? 'AgronomyView can flag disease pressure field by field from satellite imagery, and our agronomy team can help you set scouting priorities this week.' : 'Several farms nearby use AgronomyView to spot disease pressure early. Happy to share how they handle it.') : customer ? 'HealthWatch can flag mortality and treatment trends across your sites daily, and our team can help set that up this week at no cost.' : 'Several operations nearby use HealthWatch to track mortality and treatments across sites. Happy to share how they handle it.'}\n\nLet me know if a quick call would help.`
       break
     case 'Regulatory':
       subject = `What the new rule means for ${a.name}`

@@ -1,27 +1,13 @@
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { AlertOctagon, CloudSun, Send, Sparkles, X } from 'lucide-react'
+import { AlertOctagon, Send, Sparkles, X } from 'lucide-react'
 import { useBook } from '../lib/useData'
 import { useCrm } from '../store'
 import type { Outreach, OutreachStatus } from '../types'
-import { PLAYBOOK, PLAYBOOKS, draftForWeather } from '../lib/outreach'
+import { PLAYBOOK, PLAYBOOKS } from '../lib/outreach'
 import { aiRewriteOutreach } from '../lib/lucas'
-import { Button, Card, Chip, Notice, PageHeader, StatusBadge, Tabs, TextLink, inputClass } from '../components/ui'
+import { Button, Card, Chip, PageHeader, StatusBadge, Tabs, TextLink, inputClass } from '../components/ui'
 import { relDays } from '../lib/format'
-
-export function runWeatherAutomation(book: ReturnType<typeof useBook>, outreach: Outreach[], queue: ReturnType<typeof useCrm.getState>['queueOutreach']) {
-  const recent = new Set(outreach.filter((o) => o.trigger.startsWith('Weather') && Date.now() - new Date(o.createdAt).getTime() < 3 * 86400000).map((o) => o.accountId))
-  let n = 0
-  for (const a of book.customers) {
-    const w = book.weatherRisk[a.id]
-    if (!w?.kind || w.risk < 45 || recent.has(a.id)) continue
-    const when = w.day ? new Date(w.day + 'T12:00').toLocaleDateString('en-US', { weekday: 'long' }) : 'this week'
-    const d = draftForWeather(a, w.kind, when, w.detail, a.rep)
-    queue({ accountId: a.id, trigger: `Weather: ${w.kind}`, playbook: d.playbook, contactName: d.contact.name, contactEmail: d.contact.email, subject: d.subject, body: d.body, auto: true })
-    n++
-  }
-  return n
-}
 
 // Editor fields share the design-system field style; the textarea sizes by rows instead of a fixed height.
 const subjectClass = `${inputClass} w-full font-medium`
@@ -32,7 +18,7 @@ const EMPTY: Record<OutreachStatus | 'All', string> = {
   Approved: 'No approved messages.',
   Sent: 'No messages sent yet.',
   Skipped: 'No skipped messages.',
-  All: 'No outreach yet. Run the weather automation or draft a message from a signal.',
+  All: 'No outreach yet. Draft a message from a signal on the Signals page.',
 }
 
 function Item({ o }: { o: Outreach }) {
@@ -125,11 +111,9 @@ export default function OutreachPage() {
   const outreach = useCrm((s) => s.outreach)
   const autoSend = useCrm((s) => s.autoSend)
   const setAutoSend = useCrm((s) => s.setAutoSend)
-  const queueOutreach = useCrm((s) => s.queueOutreach)
   const [params] = useSearchParams()
   const accountFilter = params.get('account')
   const [tab, setTab] = useState<OutreachStatus | 'All'>(accountFilter ? 'All' : 'Draft')
-  const [msg, setMsg] = useState<string | null>(null)
   const list = useMemo(() => outreach.filter((o) => (tab === 'All' || o.status === tab) && (!accountFilter || o.accountId === accountFilter)).sort((a, b) => (b.sentAt ?? b.createdAt).localeCompare(a.sentAt ?? a.createdAt)), [outreach, tab, accountFilter])
   const count = (s: OutreachStatus) => outreach.filter((o) => o.status === s && (!accountFilter || o.accountId === accountFilter)).length
 
@@ -137,14 +121,8 @@ export default function OutreachPage() {
     <div>
       <PageHeader
         title="Automated outreach"
-        subtitle="Org changes and weather events start playbook messages. Drafts wait for your approval unless auto-send is on for that playbook. Sending is simulated in this demo."
-        actions={
-          <Button variant="primary" onClick={() => { const n = runWeatherAutomation(book, outreach, queueOutreach); setMsg(n ? `Queued ${n} weather support ${n === 1 ? 'message' : 'messages'}. Any on an auto-send playbook were sent right away` : 'No new weather risks above the threshold') }}>
-            <CloudSun size={14} /> Run weather automation
-          </Button>
-        }
+        subtitle="Org changes start playbook messages. Drafts wait for your approval unless auto-send is on for that playbook. Sending is simulated in this demo."
       />
-      {msg && <Notice>{msg}</Notice>}
       {accountFilter && (
         <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-[14px] text-ink-2">
           <span>
@@ -174,7 +152,7 @@ export default function OutreachPage() {
         </Card>
         <Card title="Playbooks and automation">
           <ul className="flex flex-col divide-y divide-line">
-            {PLAYBOOKS.map((p) => {
+            {PLAYBOOKS.filter((p) => !p.id.startsWith('weather-')).map((p) => {
               const sent = outreach.filter((o) => o.playbook === p.id && o.status === 'Sent').length
               return (
                 <li key={p.id} className="flex items-start justify-between gap-4 py-3.5 first:pt-0 last:pb-0">

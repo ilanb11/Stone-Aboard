@@ -1,14 +1,14 @@
 import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { AlertTriangle, ArrowLeft, FileSignature, Mail, Send, UserPlus } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, FileSignature, Mail, UserPlus } from 'lucide-react'
 import { useBook, signalsByAccount } from '../lib/useData'
 import { CURRENT_USER, useCrm } from '../store'
 import { PRODUCT, unitLabel } from '../data/products'
-import { Button, Card, Chip, Empty, HealthBadge, Notice, PageHeader, StatusBadge, TextLink, WeatherBadge, inputClass } from '../components/ui'
+import { Button, Card, Chip, Empty, Notice, PageHeader, StatusBadge, TextLink, inputClass } from '../components/ui'
 import { initials, money, num, relDays, shortDate } from '../lib/format'
 import { mrr } from '../lib/pricing'
-import { draftForSignal, draftForWeather, whitespace } from '../lib/outreach'
-import { toF, thi } from '../lib/weather'
+import { draftForSignal, whitespace } from '../lib/outreach'
+import { OPERATION_LABEL } from '../types'
 import { PriceAnalysisPanel, priceNoticeDraft } from './Pricing'
 
 /** Label above value, like a spec sheet. */
@@ -52,8 +52,6 @@ export default function AccountDetail() {
   const acts = activities.filter((x) => x.accountId === a.id).sort((x, y) => y.date.localeCompare(x.date))
   const mails = outreach.filter((o) => o.accountId === a.id)
   const pa = book.pricing[a.id]
-  const wr = book.weatherRisk[a.id]
-  const forecast = book.weather.byState[a.state]
   const ws = whitespace(a)
   const recentCutoff = Date.now() - 60 * 86400000
   const toast = (m: string) => {
@@ -61,11 +59,12 @@ export default function AccountDetail() {
     setTimeout(() => setFlash(null), 2500)
   }
 
+  const grain = a.species === 'Grain'
   const facts: [string, ReactNode][] = [
-    ['Head', num(a.headCount)],
+    grain ? ['Acres', num(a.acres)] : ['Head', num(a.headCount)],
     ['Sites', a.sites],
-    ['Barns', a.barns],
-    ['Acres', num(a.acres)],
+    [grain ? 'Grain bins' : 'Barns', a.barns],
+    grain ? ['Main crop', a.crops?.[0] ?? 'None'] : ['Acres', num(a.acres)],
     ['Employees', a.employees],
     ['Founded', a.yearFounded],
     ['ARR', a.status === 'Customer' ? money(mrr(a) * 12) : '—'],
@@ -82,8 +81,9 @@ export default function AccountDetail() {
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
             <Chip tone={a.status === 'Customer' ? 'accent' : a.status === 'Churned' ? 'dim' : 'neutral'}>{a.status}</Chip>
             <span>
-              {a.species}, {a.segment}
+              {OPERATION_LABEL[a.species]}, {a.segment}
             </span>
+            {grain && a.crops?.length ? <span>{a.crops.join(', ')}</span> : null}
             <span>
               {a.county} Co., {a.state}
             </span>
@@ -97,7 +97,7 @@ export default function AccountDetail() {
               to={`/contracts/${negotiation.id}`}
               className="inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-accent px-4 text-[14px] font-medium text-on-accent transition hover:opacity-85"
             >
-              <FileSignature size={14} aria-hidden /> Open in Lucas
+              <FileSignature size={14} aria-hidden /> Open in Lucas the Hog
             </Link>
           )
         }
@@ -119,7 +119,7 @@ export default function AccountDetail() {
             <div className="mb-5 flex flex-wrap gap-x-8 gap-y-3 text-[14px]">
               <Fact label="Ownership">{a.ownership}</Fact>
               <Fact label="Parent company">{a.parentCompany ?? 'Independent'}</Fact>
-              {a.integrator && <Fact label={a.species === 'Hog' ? 'Integrator' : 'Packer or co-op'}>{a.integrator}</Fact>}
+              {a.integrator && <Fact label={a.species === 'Hog' ? 'Integrator' : grain ? 'Grain marketing' : 'Packer or co-op'}>{a.integrator}</Fact>}
               {a.competitor && (
                 <Fact label="Incumbent">
                   {a.competitor}
@@ -267,63 +267,6 @@ export default function AccountDetail() {
         </div>
 
         <div className="flex min-w-0 flex-col gap-5">
-          {a.status === 'Customer' && (
-            <Card title="Weather and account health">
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-                <HealthBadge h={book.health[a.id]} />
-                <WeatherBadge w={wr} />
-              </div>
-              {wr?.kind && <p className="mt-2 text-[13px] text-ink-2">Forecast: {wr.detail}.</p>}
-              {forecast && (
-                <>
-                  <ol className="mt-4 grid grid-cols-7 gap-1.5 text-center" aria-label="7-day forecast">
-                    {forecast.map((d) => {
-                      const flagged = !!wr?.kind && wr.day === d.date
-                      const weekday = new Date(d.date + 'T12:00').toLocaleDateString('en-US', { weekday: 'short' })
-                      return (
-                        <li
-                          key={d.date}
-                          className={`min-w-0 rounded-[14px] bg-accent-soft px-0.5 py-2.5 ${flagged ? 'ring-1 ring-inset ring-ink' : ''}`}
-                          title={`${weekday}: high ${toF(d.tmax)}°F, low ${toF(d.tmin)}°F, THI ${Math.round(thi(d.tmax, d.rh))}`}
-                        >
-                          <div className="text-[12px] text-muted">{weekday}</div>
-                          <div className="tabular mt-1 text-[15px] text-ink">{toF(d.tmax)}°</div>
-                          <div className="tabular text-[12px] text-muted">{toF(d.tmin)}°</div>
-                          <div className="tabular mx-1.5 mt-1.5 border-t border-line pt-1.5 text-[12px] text-ink-2">{Math.round(thi(d.tmax, d.rh))}</div>
-                        </li>
-                      )
-                    })}
-                  </ol>
-                  <p className="mt-2 text-[12px] text-muted">Daily high, low and THI.{wr?.kind ? ' The riskiest day is outlined.' : ''}</p>
-                </>
-              )}
-              {book.health[a.id] && (
-                <dl className="mt-4 grid gap-x-6 gap-y-1.5 border-t border-line pt-4 text-[13px] sm:grid-cols-2">
-                  {book.health[a.id].parts.map((p) => (
-                    <div key={p.label} className="flex min-w-0 justify-between gap-2">
-                      <dt className="truncate text-ink-2">{p.label}</dt>
-                      <dd className="tabular text-ink">{p.value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              )}
-              {wr?.kind && (
-                <div className="mt-4">
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      const d = draftForWeather(a, wr.kind!, wr.day ? new Date(wr.day + 'T12:00').toLocaleDateString('en-US', { weekday: 'long' }) : 'this week', wr.detail, a.rep)
-                      queueOutreach({ accountId: a.id, trigger: `Weather: ${wr.kind}`, playbook: d.playbook, contactName: d.contact.name, contactEmail: d.contact.email, subject: d.subject, body: d.body, auto: false, status: 'Draft' })
-                      toast('Support message drafted and added to the outreach queue')
-                    }}
-                  >
-                    <Send size={12} /> Draft support message
-                  </Button>
-                </div>
-              )}
-            </Card>
-          )}
-
           <Card title="Contract">
             {contract || negotiation ? (
               <div className="flex flex-col gap-3 text-[14px]">
@@ -355,7 +298,7 @@ export default function AccountDetail() {
                     </div>
                     {c!.status === 'In Negotiation' && (
                       <Link to={`/contracts/${c!.id}`} className="mt-4 inline-block">
-                        <TextLink>Review {c!.redlines.length} redlines with Lucas</TextLink>
+                        <TextLink>Review {c!.redlines.length} redlines with Lucas the Hog</TextLink>
                       </Link>
                     )}
                   </div>
@@ -383,6 +326,7 @@ export default function AccountDetail() {
                         <span className="text-[12px] text-muted">{o.stage}</span>
                       </div>
                       <div className="mt-1 truncate text-[13px] text-muted">{o.products.map((p) => PRODUCT[p].name).join(', ')}</div>
+                      {o.reason && <div className="mt-0.5 text-[12px] text-ink-2">{o.reason}</div>}
                     </div>
                     <span className="tabular shrink-0 text-[15px] text-ink">{money(o.arr)}</span>
                   </li>

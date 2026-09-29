@@ -70,3 +70,8 @@ export function downloadCsv(filename: string, rows: (string | number)[][]) {
   }
   return saveText(filename, rows.map((r) => r.map(esc).join(',')).join('\n'), 'text/csv')
 }
+
+/** Operation size in its own unit: head for livestock, acres for field crops. */
+export function sizeLabel(a: { species: string; headCount: number; acres: number }): string {
+  return a.species === 'Grain' ? `${num(a.acres)} acres` : `${num(a.headCount)} head`
+}

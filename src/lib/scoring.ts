@@ -1,5 +1,5 @@
-import type { Account, Contract, Opportunity, Segment, Signal, SignalType } from '../types'
-import { OPEN_OPP_STAGES } from '../types'
+import type { Account, Contract, OppStage, Opportunity, Segment, Signal, SignalType } from '../types'
+import { isOpenStage } from '../types'
 import type { PricingAnalysis } from './pricing'
 
 const DAY = 86400000
@@ -9,11 +9,13 @@ const daysFrom = (iso: string) => (new Date(iso).getTime() - Date.now()) / DAY
 const SEGMENT_FIT: Record<Segment, number> = {
   'Integrated System': 100, 'Sow Farm': 85, 'Farrow-to-Finish': 80, 'Wean-to-Finish': 72, 'Contract Finisher': 55,
   Dairy: 80, Feedlot: 78, 'Stocker / Backgrounder': 50, 'Cow-Calf': 45,
+  'Irrigated Row Crop': 75, 'Corn & Soybean': 70, 'Wheat & Small Grains': 60, 'Diversified Grain': 55,
 }
 const INTENT_W: Record<SignalType, number> = {
   Expansion: 40, 'Ownership Change': 35, 'Leadership Change': 30, 'Integrator / Packer Change': 22, Financial: 15, Biosecurity: 12, Regulatory: 12, Contraction: 10,
 }
-const STAGE_TIMING: Record<string, number> = { Identified: 10, Qualified: 25, Proposal: 40, Negotiation: 55 }
+/** Timing credit for how far an open deal has progressed. Only open stages are ranked. */
+const STAGE_TIMING: Partial<Record<OppStage, number>> = { Prospect: 15, Demo: 35, Negotiation: 55 }
 
 export interface RankedOpp {
   key: string
@@ -38,7 +40,9 @@ export function rankOpportunities(
   const rows: RankedOpp[] = []
   const build = (key: string, account: Account, type: RankedOpp['type'], stage: RankedOpp['stage'], arr: number, opp?: Opportunity) => {
     const reasons: string[] = []
-    const sizeBoost = clamp(Math.log10(Math.max(10, account.headCount)) * 14 - 20, 0, 40)
+    // Size: head for livestock; for field crops, acres x2 so a 2,000-acre farm scores like a 4,000-head operation.
+    const size = account.species === 'Grain' ? account.acres * 2 : account.headCount
+    const sizeBoost = clamp(Math.log10(Math.max(10, size)) * 14 - 20, 0, 40)
     const fit = clamp(SEGMENT_FIT[account.segment] * 0.7 + sizeBoost)
 
     let intent = 0
@@ -51,7 +55,7 @@ export function rankOpportunities(
     }
     intent = clamp(intent)
 
-    let timing = typeof stage === 'string' && stage in STAGE_TIMING ? STAGE_TIMING[stage] : 30
+    let timing = (stage !== 'Recommended' && STAGE_TIMING[stage]) || 30
     if (account.competitorRenewal) {
       const d = daysFrom(account.competitorRenewal)
       if (d > 0 && d < 150) {
@@ -67,7 +71,7 @@ export function rankOpportunities(
         reasons.push(`Contract ends in ${Math.round(d)} days`)
       }
     }
-    if (opp && !opp.stage.startsWith('Closed')) {
+    if (opp && isOpenStage(opp.stage)) {
       const d = daysFrom(opp.closeDate)
       if (d > 0 && d < 45) timing += 15
     }
@@ -86,7 +90,7 @@ export function rankOpportunities(
   }
 
   for (const o of opps) {
-    if (!OPEN_OPP_STAGES.includes(o.stage)) continue
+    if (!isOpenStage(o.stage)) continue
     build(o.id, accounts[o.accountId], o.type, o.stage, o.arr, o)
   }
   for (const [id, pa] of Object.entries(pricing)) {
@@ -95,23 +99,4 @@ export function rankOpportunities(
   const maxArr = Math.max(...rows.map((r) => r.arr), 1)
   for (const r of rows) r.priority = Math.round(r.score * (0.45 + 0.55 * (Math.log10(Math.max(1, r.arr)) / Math.log10(maxArr))))
   return rows.sort((a, b) => b.priority - a.priority)
-}
-
-export interface Health {
-  score: number
-  level: 'Healthy' | 'Watch' | 'At risk'
-  parts: { label: string; value: number }[]
-}
-
-export function accountHealth(a: Account, weatherRisk: number): Health {
-  const h = a.health
-  const parts = [
-    { label: 'Product usage', value: h.usage, w: 0.35 },
-    { label: 'Support tickets', value: clamp(100 - h.openTickets * 12), w: 0.15 },
-    { label: 'Payment', value: clamp(100 - h.daysLate * 1.2), w: 0.15 },
-    { label: 'NPS', value: clamp((h.nps + 100) / 2), w: 0.15 },
-    { label: 'Weather outlook', value: clamp(100 - weatherRisk), w: 0.2 },
-  ]
-  const score = Math.round(parts.reduce((s, p) => s + p.value * p.w, 0))
-  return { score, level: score < 55 ? 'At risk' : score < 70 ? 'Watch' : 'Healthy', parts: parts.map(({ label, value }) => ({ label, value: Math.round(value) })) }
 }

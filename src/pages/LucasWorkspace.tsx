@@ -122,7 +122,7 @@ export default function LucasWorkspace() {
       <Empty>
         Contract not found.{' '}
         <Link to="/contracts" className="text-ink underline underline-offset-4">
-          Back to contracts
+          Back to Lucas the Hog
         </Link>
       </Empty>
     )
@@ -191,7 +191,7 @@ export default function LucasWorkspace() {
   return (
     <div>
       <Link to="/contracts" className="mb-4 inline-flex items-center gap-1.5 text-[13px] text-ink-2 transition-colors hover:text-ink">
-        <ArrowLeft size={14} aria-hidden /> All contracts
+        <ArrowLeft size={14} aria-hidden /> Lucas the Hog
       </Link>
       <PageHeader
         title={a.name}

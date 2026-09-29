@@ -10,10 +10,20 @@ export type RegionName =
   | 'Southeast'
   | 'Northeast'
 
-export type Species = 'Hog' | 'Cattle'
+/** Operation type. The field is still called `species` for history; 'Grain' = field crops. */
+export type Species = 'Hog' | 'Cattle' | 'Grain'
+export const OPERATION_TYPES: readonly Species[] = ['Hog', 'Cattle', 'Grain']
+export const OPERATION_LABEL: Record<Species, string> = { Hog: 'Hog', Cattle: 'Cattle', Grain: 'Field crops' }
+/** Filter options shared by every page that filters by operation type. */
+export const OPERATION_OPTIONS: { value: 'All' | Species; label: string }[] = [
+  { value: 'All', label: 'All operations' },
+  ...OPERATION_TYPES.map((s) => ({ value: s, label: OPERATION_LABEL[s] })),
+]
 export type HogSegment = 'Sow Farm' | 'Wean-to-Finish' | 'Farrow-to-Finish' | 'Contract Finisher' | 'Integrated System'
 export type CattleSegment = 'Cow-Calf' | 'Stocker / Backgrounder' | 'Feedlot' | 'Dairy'
-export type Segment = HogSegment | CattleSegment
+export type GrainSegment = 'Corn & Soybean' | 'Wheat & Small Grains' | 'Irrigated Row Crop' | 'Diversified Grain'
+export type Segment = HogSegment | CattleSegment | GrainSegment
+export const GRAIN_SEGMENTS: readonly GrainSegment[] = ['Corn & Soybean', 'Wheat & Small Grains', 'Irrigated Row Crop', 'Diversified Grain']
 export type AccountStatus = 'Customer' | 'Prospect' | 'Churned'
 export type Ownership = 'Family' | 'Multi-generational Family' | 'Corporate' | 'Integrator-owned' | 'Cooperative' | 'PE-backed'
 
@@ -21,7 +31,7 @@ export interface Contact {
   id: string
   name: string
   title: string
-  role: 'Owner' | 'GM' | 'CFO' | 'Operations' | 'Barn Manager' | 'Veterinarian' | 'Nutritionist'
+  role: 'Owner' | 'GM' | 'CFO' | 'Operations' | 'Barn Manager' | 'Veterinarian' | 'Nutritionist' | 'Agronomist'
   email: string
   since: string
 }
@@ -42,10 +52,11 @@ export interface Account {
   region: RegionName
   lat: number
   lon: number
-  headCount: number // hogs: pigs on hand (sows for sow farms); cattle: head / cows
+  headCount: number // hogs: pigs on hand (sows for sow farms); cattle: head / cows; field crops: 0
   sites: number
-  barns: number
+  barns: number // livestock: barns; field crops: grain bins
   acres: number
+  crops?: string[] // field crops only, main crops first
   employees: number
   yearFounded: number
   ownership: Ownership
@@ -96,9 +107,15 @@ export interface Redline {
   customerNote: string
 }
 
-export const OPP_STAGES = ['Identified', 'Qualified', 'Proposal', 'Negotiation', 'Closed Won', 'Closed Lost'] as const
+/** The one source of truth for pipeline stages, in board order. */
+export const OPP_STAGES = ['Prospect', 'Demo', 'Negotiation', 'Closed Won', 'Closed Lost', 'On Ice'] as const
 export type OppStage = (typeof OPP_STAGES)[number]
-export const OPEN_OPP_STAGES: OppStage[] = ['Identified', 'Qualified', 'Proposal', 'Negotiation']
+/** Active pipeline: counted in pipeline value and ranked. */
+export const OPEN_OPP_STAGES: OppStage[] = ['Prospect', 'Demo', 'Negotiation']
+/** Finished deals. On Ice is parked: neither open nor closed. */
+export const CLOSED_OPP_STAGES: OppStage[] = ['Closed Won', 'Closed Lost']
+export const isOpenStage = (s: OppStage) => OPEN_OPP_STAGES.includes(s)
+export const isClosedStage = (s: OppStage) => CLOSED_OPP_STAGES.includes(s)
 export type OppType = 'New Logo' | 'Expansion' | 'Renewal' | 'Price Normalization'
 
 export interface Opportunity {
@@ -112,6 +129,8 @@ export interface Opportunity {
   createdAt: string
   closeDate: string
   contractId?: string
+  /** Why a deal was lost or put on ice. */
+  reason?: string
 }
 
 export type SignalType =

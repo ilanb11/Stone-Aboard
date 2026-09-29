@@ -3,7 +3,8 @@ import { geoBounds, geoContains } from 'd3-geo'
 import type { Feature, FeatureCollection, Geometry } from 'geojson'
 import type { Topology } from 'topojson-specification'
 import usTopo from 'us-atlas/states-10m.json'
-import type { Account, Activity, CattleSegment, Contact, Contract, HogSegment, Opportunity, OppStage, Outreach, Ownership, PriceMechanism, Redline, Segment, Signal, SignalType, Species, Subscription } from '../types'
+import type { Account, Activity, CattleSegment, Contact, Contract, GrainSegment, HogSegment, Opportunity, OppStage, Outreach, Ownership, PriceMechanism, Redline, Segment, Signal, SignalType, Species, Subscription } from '../types'
+import { GRAIN_SEGMENTS, isClosedStage } from '../types'
 import { STATE_LIST, STATES, type StateInfo } from './geo'
 import { PRODUCT, SEGMENT_FIT, unitsFor } from './products'
 import { CLAUSE, REDLINE_LIBRARY, REDLINE_BY_KEY, TEMPLATE_VERSION, renderClause } from './contracts'
@@ -20,7 +21,11 @@ function mulberry32(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 }
-const rng = mulberry32(4172026)
+// Each seeding pass gets its own stream so adding a pass never reshuffles earlier ones.
+const BASE_SEED = 4172026
+const SPREAD_SEED = 20260930
+const GRAIN_SEED = 7310511
+let rng = mulberry32(BASE_SEED)
 const rand = (lo = 0, hi = 1) => lo + rng() * (hi - lo)
 const randInt = (lo: number, hi: number) => Math.floor(rand(lo, hi + 1))
 const chance = (p: number) => rng() < p
@@ -93,6 +98,11 @@ function makeContacts(name: string, seg: Segment, big: boolean, founded: number)
   const out: Contact[] = [person('Owner', big ? 'President & CEO' : 'Owner', randInt(365 * 3, 365 * Math.max(4, TODAY.getFullYear() - founded)))]
   if (big || chance(0.5)) out.push(person('GM', 'General Manager', randInt(200, 3000)))
   if (big) out.push(person('CFO', 'Chief Financial Officer', randInt(200, 3000)))
+  if (GRAIN_SEGMENTS.includes(seg as GrainSegment)) {
+    out.push(person('Operations', 'Farm Manager', randInt(100, 2500)))
+    if (chance(0.6)) out.push(person('Agronomist', 'Crop Consultant', randInt(100, 3000)))
+    return out
+  }
   const hog = ['Sow Farm', 'Wean-to-Finish', 'Farrow-to-Finish', 'Contract Finisher', 'Integrated System'].includes(seg)
   out.push(person(hog || seg === 'Dairy' ? 'Barn Manager' : 'Operations', hog ? 'Production Manager' : seg === 'Dairy' ? 'Herd Manager' : 'Operations Manager', randInt(100, 2500)))
   if (seg === 'Sow Farm' || seg === 'Integrated System' || seg === 'Dairy' || seg === 'Feedlot' || chance(0.3)) out.push(person('Veterinarian', 'Consulting Veterinarian', randInt(100, 3000)))
@@ -111,7 +121,9 @@ function accountName(seg: Segment, species: Species, used: Set<string>): string 
           : seg === 'Sow Farm'
             ? [`${pl} Sow Unit`, `${sn} Genetics & Sows`, `${pl} Pork Producers`]
             : [`${sn} Pork`, `${pl} Swine`, `${sn} Family Farms`, `${pl} Pork Producers LLC`, `${sn} Hog Farms`, `${sn} ${pl} Farms`]
-        : seg === 'Dairy'
+        : species === 'Grain'
+          ? [`${sn} Farms`, `${pl} Grain`, `${sn} Family Farms`, `${pl} Acres`, `${sn} Brothers Farms`, `${pl} Farms`, `${sn} Ag`]
+          : seg === 'Dairy'
           ? [`${pl} Dairy`, `${sn} Dairy Farms`, `${sn} Family Dairy`, `${sn} ${pl} Dairy`]
           : seg === 'Feedlot'
             ? [`${pl} Feeders`, `${sn} Feedyard`, `${pl} Cattle Feeders`, `${sn} ${pl} Feedyard`]
@@ -262,6 +274,7 @@ const SIGNAL_W: [SignalType, number][] = [
 const SOURCES = ['State permit filings', 'Press release', 'Trade press', 'LinkedIn', 'County records', 'Rep field note', 'Lender announcement', 'State ag department']
 
 function accountSignal(a: Account, type: SignalType, date: string): Signal {
+  if (a.species === 'Grain') return grainSignal(a, type, date)
   const hog = a.species === 'Hog'
   const where = `${a.county} Co., ${a.state}`
   const sig = (headline: string, detail: string, severity: Signal['severity']): Signal => ({ id: '', date, type, headline, detail, accountId: a.id, state: a.state, severity, source: pick(SOURCES) })
@@ -345,6 +358,156 @@ function stateSignal(date: string): Signal {
   return { id: '', date, type, headline, detail, state: code, severity: 'Medium', source: 'State ag department' }
 }
 
+// ---------- field crops ----------
+const CORN_BELT = ['IA', 'IL', 'IN', 'OH', 'MN', 'MO', 'WI', 'MI', 'SD', 'NE']
+const WHEAT_STATES = ['KS', 'ND', 'MT', 'WA', 'OK', 'ID', 'CO', 'OR', 'SD']
+const IRRIGATED_STATES = ['NE', 'TX', 'CA', 'AR', 'MS', 'LA', 'CO', 'ID', 'KS']
+const ELEVATORS = ['Prairie Grain Cooperative', 'Heartland Elevator Co.', 'Plains Grain Partners', 'River Terminal Grain', 'Northern Plains Ag Co-op']
+const GRAIN_ACQUIRERS = ['Midwest Farmland Partners', 'Summit Agri Partners', 'Crossroads Ag Capital', 'Prairie Grain Cooperative']
+const GRAIN_COMPETITORS = ['AcreDesk', 'Furrowline', 'Spreadsheets / paper']
+
+function grainCrops(seg: GrainSegment, st: StateInfo): string[] {
+  switch (seg) {
+    case 'Corn & Soybean':
+      return chance(0.3) ? ['Corn', 'Soybeans', 'Wheat'] : ['Corn', 'Soybeans']
+    case 'Wheat & Small Grains': {
+      const second =
+        st.code === 'ND' ? pick(['Canola', 'Barley', 'Sunflowers', 'Soybeans'])
+        : st.code === 'MT' ? pick(['Barley', 'Pulses'])
+        : ['KS', 'OK'].includes(st.code) ? pick(['Sorghum', 'Soybeans'])
+        : ['WA', 'OR', 'ID'].includes(st.code) ? pick(['Barley', 'Chickpeas'])
+        : pick(['Barley', 'Sunflowers', 'Corn'])
+      return ['Wheat', second]
+    }
+    case 'Irrigated Row Crop':
+      if (st.code === 'TX') return ['Cotton', 'Sorghum']
+      if (['AR', 'MS', 'LA'].includes(st.code)) return ['Rice', 'Soybeans']
+      if (st.code === 'CA') return ['Rice', 'Wheat']
+      if (st.code === 'ID') return ['Potatoes', 'Wheat']
+      return chance(0.3) ? ['Corn', 'Soybeans', 'Dry Beans'] : ['Corn', 'Soybeans']
+    case 'Diversified Grain': {
+      const pool = ['Corn', 'Soybeans', 'Wheat', 'Sorghum', 'Oats', 'Hay']
+      const out = [pick(pool)]
+      while (out.length < 3) {
+        const c = pick(pool)
+        if (!out.includes(c)) out.push(c)
+      }
+      return out
+    }
+  }
+}
+
+function generateGrainAccount(i: number, used: Set<string>): Account {
+  const st = pickW(STATE_LIST, STATE_LIST.map((s) => s.crops + 0.05))
+  const segment = pickW<GrainSegment>([...GRAIN_SEGMENTS], [CORN_BELT.includes(st.code) ? 60 : 15, WHEAT_STATES.includes(st.code) ? 45 : 5, IRRIGATED_STATES.includes(st.code) ? 30 : 4, 20])
+  const median = { 'Corn & Soybean': 1600, 'Wheat & Small Grains': 3800, 'Irrigated Row Crop': 2400, 'Diversified Grain': 1100 }[segment]
+  const acres = Math.round(clamp(logN(median, 0.7), 150, 35000) / 10) * 10
+  const crops = grainCrops(segment, st)
+  const big = acres > 8000
+  const yearFounded = Math.round(clamp(1975 - Math.abs(gauss()) * 40 + rand(0, 35), 1890, 2022))
+  const ownership: Ownership = pickW<Ownership>(['Family', 'Multi-generational Family', 'Corporate', 'Cooperative', 'PE-backed'], [42, 36, 10, 4, 4])
+  const name = accountName(segment, 'Grain', used)
+  const [lon, lat] = pointInState(st)
+  const statusRoll = rng() + (big ? 0.12 : 0)
+  const status = statusRoll > 0.68 ? 'Customer' : statusRoll > 0.63 ? 'Churned' : 'Prospect'
+  const base: Omit<Account, 'subscriptions'> = {
+    id: `G${String(i + 1).padStart(4, '0')}`,
+    name,
+    species: 'Grain',
+    segment,
+    state: st.code,
+    county: pick(st.counties),
+    region: st.region,
+    lat,
+    lon,
+    headCount: 0,
+    sites: clamp(1 + Math.floor(acres / 4000), 1, 6),
+    barns: Math.max(2, Math.round((acres / 350) * rand(0.6, 1.3))),
+    acres,
+    crops,
+    employees: Math.max(1, Math.round(acres / 1100 + rand(0, 2))),
+    yearFounded,
+    ownership,
+    parentCompany: ownership === 'PE-backed' ? pick(['Summit Agri Partners', 'Crossroads Ag Capital']) : undefined,
+    integrator: chance(0.45) ? pick(ELEVATORS) : undefined,
+    status,
+    rep: TERRITORY[st.region],
+    contacts: makeContacts(name, segment, big, yearFounded),
+    competitor: status !== 'Customer' ? pick(GRAIN_COMPETITORS) : undefined,
+    competitorRenewal: status !== 'Customer' && chance(0.7) ? iso(randInt(-30, 330)) : undefined,
+    health:
+      status === 'Customer'
+        ? { usage: Math.round(clamp(70 + gauss() * 18, 8, 99)), openTickets: chance(0.65) ? 0 : randInt(1, 5), daysLate: chance(0.85) ? 0 : randInt(10, 60), nps: Math.round(clamp(40 + gauss() * 26, -60, 90)) }
+        : { usage: 0, openTickets: 0, daysLate: 0, nps: 0 },
+    lastContact: iso(-randInt(1, status === 'Customer' ? 90 : 240)),
+  }
+  const subscriptions = status === 'Prospect' ? [] : subsFor(base, status === 'Customer' ? 0.55 : 0.35)
+  return { ...base, subscriptions }
+}
+
+function grainSignal(a: Account, type: SignalType, date: string): Signal {
+  const where = `${a.county} Co., ${a.state}`
+  const sig = (headline: string, detail: string, severity: Signal['severity']): Signal => ({ id: '', date, type, headline, detail, accountId: a.id, state: a.state, severity, source: pick(SOURCES) })
+  const main = a.crops?.[0] ?? 'Corn'
+  switch (type) {
+    case 'Leadership Change': {
+      const role = pick(['GM', 'CFO', 'Operations'] as const)
+      const title = role === 'GM' ? 'General Manager' : role === 'CFO' ? 'Chief Financial Officer' : 'Farm Manager'
+      const person = `${pick(FIRST)} ${pick(SURNAMES)}`
+      a.contacts.push({ id: `C${Math.floor(rng() * 1e9).toString(36)}`, name: person, title, role, email: `${person.replace(' ', '.').toLowerCase()}@${slug(a.name)}.example`, since: date })
+      return sig(`${person} named ${title} at ${a.name}`, `${person} takes over day-to-day decisions at ${a.name} (${where}). A good moment to revisit how field records and bin data are handled.`, role === 'CFO' ? 'Medium' : 'High')
+    }
+    case 'Ownership Change': {
+      const buyer = pick(GRAIN_ACQUIRERS)
+      a.parentCompany = buyer
+      a.ownership = buyer.includes('Cooperative') ? 'Cooperative' : 'PE-backed'
+      return sig(`${buyer} acquires ${a.name}`, `${buyer} has acquired ${a.name} (${a.acres.toLocaleString()} acres, ${where}). Contract assignment and the buyer's record-keeping standards need review.`, 'High')
+    }
+    case 'Expansion': {
+      if (chance(0.55)) {
+        const add = Math.round((a.acres * rand(0.1, 0.4)) / 10) * 10
+        a.acres += add
+        return sig(`${a.name} adds ${add.toLocaleString()} acres of leased ground`, `New ${main.toLowerCase()} acres in ${where} for next season. The time to add field coverage is before planting.`, 'High')
+      }
+      const bins = randInt(2, 6)
+      a.barns += bins
+      return sig(`${a.name} builds ${(bins * 60000).toLocaleString()}-bushel grain storage expansion`, `${bins} new bins going up in ${where}. New bins are the easiest time to add monitoring.`, 'Medium')
+    }
+    case 'Contraction': {
+      const cut = Math.round((a.acres * rand(0.15, 0.4)) / 10) * 10
+      a.acres = Math.max(150, a.acres - cut)
+      return sig(`${a.name} sells ${cut.toLocaleString()} acres`, `Reported land sale in ${where}. Churn risk if the subscription is not right-sized.`, a.status === 'Customer' ? 'High' : 'Low')
+    }
+    case 'Integrator / Packer Change': {
+      const next = pick(ELEVATORS.filter((x) => x !== a.integrator))
+      const prev = a.integrator
+      a.integrator = next
+      return sig(`${a.name} moves grain marketing to ${next}`, `${prev ? `Previously sold through ${prev}. ` : ''}New delivery and settlement records start with this harvest.`, 'Medium')
+    }
+    case 'Financial': {
+      if (chance(0.5)) return sig(`${a.name} secures $${Math.max(1, Math.round(logN(3, 0.6)))}M operating line from ${pick(LENDERS)}`, 'Fresh capital for inputs, storage and equipment.', 'Medium')
+      if (chance(0.5)) return sig(`${a.name} enrolls ${Math.round(a.acres * rand(0.3, 0.9)).toLocaleString()} acres in a carbon program`, 'Carbon programs require field-level practice records, which FieldTrack keeps.', 'Low')
+      return sig(`${a.name}: lender reports covenant waiver`, 'Financial pressure after a tight harvest. Adjust payment terms proactively to protect the account.', 'Medium')
+    }
+    case 'Biosecurity':
+      return sig(main === 'Wheat' ? `Stripe rust found in ${a.name}'s wheat` : `Tar spot confirmed in ${a.name}'s corn`, `Reported through ${pick(['the crop consultant', 'extension scouting', 'a rep field note'])}. Offer AgronomyView scouting support.`, 'High')
+    default:
+      return sig(pick([`${a.name} files a nitrogen management plan under new state rules`, `${a.name} completes a sustainability audit for a grain buyer`, `${a.name} applies for a USDA conservation program`]), 'Compliance events come with record-keeping deadlines, which is a good time to offer TraceLink support.', 'Medium')
+  }
+}
+
+function grainStateSignal(date: string): Signal {
+  const st = pickW(STATE_LIST, STATE_LIST.map((s) => s.crops + 0.05))
+  const opts: [SignalType, string, string, Signal['severity']][] = [
+    ['Biosecurity', `Tar spot confirmed across ${st.name} corn`, 'Extension specialists urge scouting before fungicide decisions.', 'High'],
+    ['Biosecurity', `Wheat stripe rust reported in ${st.name}`, 'Early detections this season; growers are advised to scout fields weekly.', 'Medium'],
+    ['Regulatory', `${st.name} tightens fall nitrogen application rules near wells`, 'New application windows and record requirements take effect next season.', 'Medium'],
+    ['Regulatory', `USDA opens enrollment for a conservation program in ${st.name}`, 'Enrollment needs field-level practice records.', 'Low'],
+  ]
+  const [type, headline, detail, severity] = pick(opts)
+  return { id: '', date, type, headline, detail, state: st.code, severity, source: 'State ag department' }
+}
+
 // ---------- assembly ----------
 export interface Dataset {
   accounts: Account[]
@@ -355,40 +518,51 @@ export interface Dataset {
   activities: Activity[]
 }
 
-export const SEED_VERSION = 13
+export const SEED_VERSION = 14
 
-export function generateDataset(n = 900): Dataset {
+const LOST_REASONS = ['Lost to a competitor on price', 'Stayed with spreadsheets', 'No budget this year', "Chose their integrator's system", 'Decision maker left before signing']
+const ON_ICE_REASONS = ['Budget frozen until after harvest', 'Waiting on integrator approval', 'Paused after a herd health break', 'Revisit after the lender review', 'Champion left the company', 'Revisit next budget cycle']
+type StageWeights = [OppStage[], number[]]
+
+export function generateDataset(n = 900, grainCount = 240): Dataset {
+  rng = mulberry32(BASE_SEED)
   const used = new Set<string>()
   const accounts = Array.from({ length: n }, (_, i) => generateAccount(i, used))
   const contracts: Contract[] = []
-  for (const a of accounts) {
-    if (a.status !== 'Customer') continue
-    const c = makeContract(a, contracts.length)
-    a.contractId = c.id
-    contracts.push(c)
-  }
-
-  // Signals over the last 120 days
   const signals: Signal[] = []
-  for (let i = 0; i < 280; i++) {
-    const date = iso(-Math.floor(Math.pow(rng(), 1.3) * 120))
-    let s: Signal
-    if (chance(0.78)) {
-      const a = chance(0.45) ? pick(accounts.filter((x) => x.status === 'Customer')) : pick(accounts)
-      const type = pickW(SIGNAL_W.map((x) => x[0]), SIGNAL_W.map((x) => x[1]))
-      s = accountSignal(a, type, date)
-    } else s = stateSignal(date)
-    s.id = `S${String(i + 1).padStart(4, '0')}`
-    signals.push(s)
-  }
-  signals.sort((a, b) => b.date.localeCompare(a.date))
-  const ownershipAccounts = new Set(signals.filter((s) => s.type === 'Ownership Change').map((s) => s.accountId))
-
-  // Opportunities
   const opportunities: Opportunity[] = []
+  const outreach: Outreach[] = []
+  const activities: Activity[] = []
+  const ownershipAccounts = new Set<string | undefined>()
+
+  const addContracts = (list: Account[]) => {
+    for (const a of list) {
+      if (a.status !== 'Customer') continue
+      const c = makeContract(a, contracts.length)
+      a.contractId = c.id
+      contracts.push(c)
+    }
+  }
+  const addSignals = (count: number, pool: Account[], market: (date: string) => Signal, weights: [SignalType, number][]) => {
+    const fresh: Signal[] = []
+    for (let i = 0; i < count; i++) {
+      const date = iso(-Math.floor(Math.pow(rng(), 1.3) * 120))
+      let s: Signal
+      if (chance(0.78)) {
+        const a = chance(0.45) ? pick(pool.filter((x) => x.status === 'Customer')) : pick(pool)
+        s = accountSignal(a, pickW(weights.map((x) => x[0]), weights.map((x) => x[1])), date)
+      } else s = market(date)
+      s.id = `S${String(signals.length + fresh.length + 1).padStart(4, '0')}`
+      fresh.push(s)
+    }
+    fresh.sort((a, b) => b.date.localeCompare(a.date))
+    for (const s of fresh) if (s.type === 'Ownership Change') ownershipAccounts.add(s.accountId)
+    signals.push(...fresh)
+    return fresh
+  }
   const addOpp = (a: Account, type: Opportunity['type'], stage: OppStage, products: string[], arr: number) => {
     const id = `O${String(opportunities.length + 1).padStart(4, '0')}`
-    const o: Opportunity = { id, accountId: a.id, type, stage, arr: Math.round(arr), products, owner: a.rep, createdAt: iso(-randInt(5, 200)), closeDate: iso(stage.startsWith('Closed') ? -randInt(1, 120) : randInt(10, 160)) }
+    const o: Opportunity = { id, accountId: a.id, type, stage, arr: Math.round(arr), products, owner: a.rep, createdAt: iso(-randInt(5, 200)), closeDate: iso(isClosedStage(stage) ? -randInt(1, 120) : randInt(10, 160)) }
     if (stage === 'Negotiation') {
       const c: Contract = { ...makeContract(a, contracts.length), status: 'In Negotiation', start: iso(randInt(15, 45)), template: TEMPLATE_VERSION, redlines: redlinesFor(a, ownershipAccounts.has(a.id)), opportunityId: id }
       c.end = new Date(new Date(c.start).getTime() + c.termMonths * 30.4 * DAY).toISOString()
@@ -396,46 +570,137 @@ export function generateDataset(n = 900): Dataset {
       o.contractId = c.id
     }
     opportunities.push(o)
+    return o
   }
-  for (const a of accounts) {
-    const fit = SEGMENT_FIT[a.segment]
-    if (a.status === 'Prospect' && chance(0.3)) {
-      const products = fit.filter((_, i) => i < 2 || chance(0.5))
-      const arr = products.reduce((s, p) => s + unitsFor(p, a) * PRODUCT[p].listPrice * (1 - expectedDiscount(2000)), 0) * 12
-      addOpp(a, 'New Logo', pickW<OppStage>(['Identified', 'Qualified', 'Proposal', 'Negotiation', 'Closed Won', 'Closed Lost'], [30, 25, 18, 10, 7, 10]), products, arr)
-    }
-    if (a.status === 'Customer') {
-      const have = new Set(a.subscriptions.map((s) => s.productId))
-      const ws = fit.filter((p) => !have.has(p))
-      if (ws.length && chance(0.35)) {
-        const products = ws.slice(0, randInt(1, ws.length))
-        addOpp(a, 'Expansion', pickW<OppStage>(['Identified', 'Qualified', 'Proposal', 'Negotiation', 'Closed Won'], [30, 25, 22, 10, 8]), products, products.reduce((s, p) => s + unitsFor(p, a) * PRODUCT[p].listPrice * 0.85, 0) * 12)
+  const newLogoArr = (a: Account, products: string[]) => products.reduce((s, p) => s + unitsFor(p, a) * PRODUCT[p].listPrice * (1 - expectedDiscount(2000)), 0) * 12
+  const expansionArr = (a: Account, products: string[]) => products.reduce((s, p) => s + unitsFor(p, a) * PRODUCT[p].listPrice * 0.85, 0) * 12
+  const currentArr = (a: Account) => a.subscriptions.reduce((s, x) => s + x.units * x.unitPrice, 0) * 12
+  const addOpps = (list: Account[], stages: { logo: StageWeights; expansion: StageWeights; renewal: StageWeights }) => {
+    for (const a of list) {
+      const fit = SEGMENT_FIT[a.segment]
+      if (a.status === 'Prospect' && chance(0.3)) {
+        const products = fit.filter((_, i) => i < 2 || chance(0.5))
+        addOpp(a, 'New Logo', pickW<OppStage>(...stages.logo), products, newLogoArr(a, products))
       }
-      const c = contracts.find((x) => x.id === a.contractId)!
-      const daysToEnd = (new Date(c.end).getTime() - TODAY.getTime()) / DAY
-      if (daysToEnd < 150 && daysToEnd > 0) addOpp(a, 'Renewal', pickW<OppStage>(['Identified', 'Qualified', 'Proposal', 'Negotiation'], [30, 30, 25, 15]), a.subscriptions.map((s) => s.productId), a.subscriptions.reduce((s, x) => s + x.units * x.unitPrice, 0) * 12)
+      if (a.status === 'Customer') {
+        const have = new Set(a.subscriptions.map((s) => s.productId))
+        const ws = fit.filter((p) => !have.has(p))
+        if (ws.length && chance(0.35)) {
+          const products = ws.slice(0, randInt(1, ws.length))
+          addOpp(a, 'Expansion', pickW<OppStage>(...stages.expansion), products, expansionArr(a, products))
+        }
+        const c = contracts.find((x) => x.id === a.contractId)!
+        const daysToEnd = (new Date(c.end).getTime() - TODAY.getTime()) / DAY
+        if (daysToEnd < 150 && daysToEnd > 0) addOpp(a, 'Renewal', pickW<OppStage>(...stages.renewal), a.subscriptions.map((s) => s.productId), currentArr(a))
+      }
     }
+  }
+  const addOutreach = (list: Signal[], byId: Record<string, Account>) => {
+    for (const s of list) {
+      if (!s.accountId) continue
+      const age = (TODAY.getTime() - new Date(s.date).getTime()) / DAY
+      if (age > 60) continue
+      const a = byId[s.accountId]
+      const d = draftForSignal(a, s, a.rep)
+      const status = age <= 10 ? 'Draft' : chance(0.85) ? 'Sent' : 'Skipped'
+      const o: Outreach = { id: `M${String(outreach.length + 1).padStart(4, '0')}`, accountId: a.id, signalId: s.id, trigger: s.type, playbook: d.playbook, contactName: d.contact.name, contactEmail: d.contact.email, subject: d.subject, body: d.body, status, createdAt: s.date, sentAt: status === 'Sent' ? iso(-Math.max(0, Math.floor(age) - randInt(0, 3))) : undefined, auto: true }
+      outreach.push(o)
+      if (status === 'Sent') activities.push({ id: `V${outreach.length}`, accountId: a.id, date: o.sentAt!, author: a.rep, kind: 'Email', text: `Sent "${o.subject}" to ${o.contactName} (playbook: ${o.playbook}).` })
+    }
+  }
+  const addActivities = (list: Account[], notes: string[]) => {
+    for (const a of list) {
+      if (a.status !== 'Customer' || !chance(0.7)) continue
+      activities.push({ id: `V-${a.id}`, accountId: a.id, date: a.lastContact, author: a.rep, kind: pick(['Call', 'Note'] as const), text: pick(notes) })
+    }
+  }
+  const sample = <T,>(arr: T[], k: number) => {
+    const copy = [...arr]
+    const out: T[] = []
+    while (out.length < k && copy.length) out.push(copy.splice(Math.floor(rng() * copy.length), 1)[0])
+    return out
+  }
+  // A customer's original win: a closed-won new-logo deal dated at contract start.
+  const addWonHistory = (a: Account) => {
+    const c = contracts.find((x) => x.id === a.contractId)!
+    const o = addOpp(a, 'New Logo', 'Closed Won', a.subscriptions.map((s) => s.productId), currentArr(a))
+    o.closeDate = c.start
+    o.createdAt = new Date(new Date(c.start).getTime() - randInt(30, 120) * DAY).toISOString()
   }
 
-  // Outreach queue seeded from recent account signals
-  const outreach: Outreach[] = []
-  const activities: Activity[] = []
-  const byId = Object.fromEntries(accounts.map((a) => [a.id, a]))
-  for (const s of signals) {
-    if (!s.accountId) continue
-    const age = (TODAY.getTime() - new Date(s.date).getTime()) / DAY
-    if (age > 60) continue
-    const a = byId[s.accountId]
-    const d = draftForSignal(a, s, a.rep)
-    const status = age <= 10 ? 'Draft' : chance(0.85) ? 'Sent' : 'Skipped'
-    const o: Outreach = { id: `M${String(outreach.length + 1).padStart(4, '0')}`, accountId: a.id, signalId: s.id, trigger: s.type, playbook: d.playbook, contactName: d.contact.name, contactEmail: d.contact.email, subject: d.subject, body: d.body, status, createdAt: s.date, sentAt: status === 'Sent' ? iso(-Math.max(0, Math.floor(age) - randInt(0, 3))) : undefined, auto: true }
-    outreach.push(o)
-    if (status === 'Sent') activities.push({ id: `V${outreach.length}`, accountId: a.id, date: o.sentAt!, author: a.rep, kind: 'Email', text: `Sent "${o.subject}" to ${o.contactName} (playbook: ${o.playbook}).` })
+  // Pass 1: hog and cattle. The stage lists keep their original weights and order
+  // (Identified, Qualified, Proposal, Negotiation are now Prospect, Demo, Demo,
+  // Negotiation), so the random stream and every record it produces are unchanged.
+  addContracts(accounts)
+  const baseSignals = addSignals(280, accounts, stateSignal, SIGNAL_W)
+  addOpps(accounts, {
+    logo: [['Prospect', 'Demo', 'Demo', 'Negotiation', 'Closed Won', 'Closed Lost'], [30, 25, 18, 10, 7, 10]],
+    expansion: [['Prospect', 'Demo', 'Demo', 'Negotiation', 'Closed Won'], [30, 25, 22, 10, 8]],
+    renewal: [['Prospect', 'Demo', 'Demo', 'Negotiation'], [30, 30, 25, 15]],
+  })
+  addOutreach(baseSignals, Object.fromEntries(accounts.map((a) => [a.id, a])))
+  addActivities(accounts, ['Quarterly check-in. Team happy with closeout reports.', 'Walked barn manager through the new alarm routing.', 'Discussed adding remaining sites next budget cycle.', 'Support ticket on sensor connectivity resolved.', 'Owner asked about benchmarking against similar operations.'])
+
+  // Pass 2: stage spread, on its own stream, so every stage has realistic data.
+  rng = mulberry32(SPREAD_SEED)
+  // A won new-logo deal means the account signed: turn those few seeded prospects
+  // into customers with the subscription and contract they signed.
+  for (const o of [...opportunities]) {
+    const a = accounts.find((x) => x.id === o.accountId)!
+    if (o.type !== 'New Logo' || o.stage !== 'Closed Won' || a.status !== 'Prospect') continue
+    const listM = o.products.reduce((s, p) => s + unitsFor(p, a) * PRODUCT[p].listPrice, 0)
+    a.status = 'Customer'
+    a.subscriptions = o.products.map((p) => ({ productId: p, units: unitsFor(p, a), unitPrice: Math.round(PRODUCT[p].listPrice * (1 - expectedDiscount(listM)) * 100) / 100 }))
+    a.competitor = undefined
+    a.competitorRenewal = undefined
+    a.health = { usage: randInt(45, 80), openTickets: randInt(0, 2), daysLate: 0, nps: randInt(20, 60) }
+    const c = makeContract(a, contracts.length)
+    c.start = o.closeDate
+    c.end = new Date(new Date(c.start).getTime() + c.termMonths * 30.4 * DAY).toISOString()
+    a.contractId = c.id
+    contracts.push(c)
   }
-  for (const a of accounts) {
-    if (a.status !== 'Customer' || !chance(0.7)) continue
-    activities.push({ id: `V-${a.id}`, accountId: a.id, date: a.lastContact, author: a.rep, kind: pick(['Call', 'Note'] as const), text: pick(['Quarterly check-in. Team happy with closeout reports.', 'Walked barn manager through the new alarm routing.', 'Discussed adding remaining sites next budget cycle.', 'Support ticket on sensor connectivity resolved.', 'Owner asked about benchmarking against similar operations.']) })
+  const custs = accounts.filter((a) => a.status === 'Customer')
+  const prospects = accounts.filter((a) => a.status === 'Prospect')
+  for (const a of sample(custs, 40)) addWonHistory(a)
+  for (const a of sample(prospects, 32)) {
+    const products = SEGMENT_FIT[a.segment].slice(0, 2)
+    addOpp(a, 'New Logo', 'Closed Lost', products, newLogoArr(a, products)).reason = pick(LOST_REASONS)
   }
+  for (const a of sample(custs, 10)) {
+    const ws = SEGMENT_FIT[a.segment].filter((p) => !a.subscriptions.some((s) => s.productId === p)).slice(0, 1)
+    if (ws.length) addOpp(a, 'Expansion', 'Closed Lost', ws, expansionArr(a, ws)).reason = pick(LOST_REASONS.slice(1))
+  }
+  for (const a of sample(prospects, 30)) {
+    const products = SEGMENT_FIT[a.segment].slice(0, 2)
+    addOpp(a, 'New Logo', 'On Ice', products, newLogoArr(a, products)).reason = pick(ON_ICE_REASONS)
+  }
+  for (const a of sample(custs, 12)) {
+    const ws = SEGMENT_FIT[a.segment].filter((p) => !a.subscriptions.some((s) => s.productId === p)).slice(0, 2)
+    if (ws.length) addOpp(a, 'Expansion', 'On Ice', ws, expansionArr(a, ws)).reason = pick(ON_ICE_REASONS.slice(3))
+  }
+
+  // Pass 3: field crops, on its own stream.
+  rng = mulberry32(GRAIN_SEED)
+  const grain = Array.from({ length: grainCount }, (_, i) => generateGrainAccount(i, used))
+  accounts.push(...grain)
+  addContracts(grain)
+  const grainSignals = addSignals(80, grain, grainStateSignal, [['Leadership Change', 18], ['Ownership Change', 10], ['Expansion', 22], ['Contraction', 8], ['Integrator / Packer Change', 12], ['Financial', 14], ['Biosecurity', 8], ['Regulatory', 8]])
+  const firstGrainOpp = opportunities.length
+  addOpps(grain, {
+    logo: [['Prospect', 'Demo', 'Negotiation', 'Closed Lost', 'On Ice'], [30, 40, 10, 10, 8]],
+    expansion: [['Prospect', 'Demo', 'Negotiation', 'Closed Won', 'On Ice'], [30, 40, 10, 8, 6]],
+    renewal: [['Prospect', 'Demo', 'Negotiation'], [30, 50, 20]],
+  })
+  for (const o of opportunities.slice(firstGrainOpp)) {
+    if (o.stage === 'On Ice') o.reason = pick(['Budget frozen until after harvest', 'Revisit after the lender review', 'Waiting on the new farm manager', 'Revisit next budget cycle'])
+    if (o.stage === 'Closed Lost') o.reason = pick(['Lost to a competitor on price', 'Stayed with spreadsheets', 'No budget this year', 'Went with the equipment dealer bundle'])
+  }
+  for (const a of sample(grain.filter((g) => g.status === 'Customer'), 18)) addWonHistory(a)
+  addOutreach(grainSignals, Object.fromEntries(grain.map((a) => [a.id, a])))
+  addActivities(grain, ['Pre-harvest check-in. Yield maps syncing from the combine.', 'Walked the farm manager through bin alerts.', 'Discussed adding the leased ground to FieldTrack.', 'Support ticket on a bin sensor resolved.', 'Owner asked for a nitrogen report by field.'])
+
+  signals.sort((a, b) => b.date.localeCompare(a.date))
   return { accounts, contracts, opportunities, signals, outreach, activities }
 }
 

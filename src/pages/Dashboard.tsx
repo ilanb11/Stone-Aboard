@@ -3,9 +3,9 @@ import { Link } from 'react-router-dom'
 import { FileSignature, Newspaper } from 'lucide-react'
 import { useBook, signals } from '../lib/useData'
 import { useCrm } from '../store'
-import { OPEN_OPP_STAGES } from '../types'
-import { BarList, Card, Chip, HealthBadge, LucasMark, PageHeader, Stat, TextLink, WeatherBadge } from '../components/ui'
-import { money, num, relDays, shortDate } from '../lib/format'
+import { OPP_STAGES, isOpenStage } from '../types'
+import { BarList, Card, Chip, LucasMark, PageHeader, Stat, TextLink } from '../components/ui'
+import { money, num, relDays, shortDate, sizeLabel } from '../lib/format'
 import { SignalRow } from './Signals'
 
 const nameLink = 'text-ink underline-offset-4 hover:underline'
@@ -26,19 +26,18 @@ export default function Dashboard() {
   const outreach = useCrm((s) => s.outreach)
   const m = useMemo(() => {
     const arr = book.customers.reduce((s, a) => s + a.subscriptions.reduce((x, l) => x + l.units * l.unitPrice, 0) * 12, 0)
-    const open = book.opportunities.filter((o) => OPEN_OPP_STAGES.includes(o.stage))
+    const open = book.opportunities.filter((o) => isOpenStage(o.stage))
     const uplift = Object.values(book.pricing).reduce((s, p) => s + p.upliftArr, 0)
     const underpriced = Object.values(book.pricing).filter((p) => p.status === 'Under-priced').length
-    const support = book.customers
-      .filter((a) => book.health[a.id]?.level === 'At risk' || book.weatherRisk[a.id]?.risk >= 45)
-      .sort((a, b) => (book.weatherRisk[b.id]?.risk ?? 0) - (book.weatherRisk[a.id]?.risk ?? 0) || (book.health[a.id]?.score ?? 0) - (book.health[b.id]?.score ?? 0))
+    const since90 = Date.now() - 90 * 86400000
+    const wonRecent = book.opportunities.filter((o) => o.stage === 'Closed Won' && new Date(o.closeDate).getTime() > since90)
     const week = signals.filter((s) => Date.now() - new Date(s.date).getTime() < 7 * 86400000)
-    const byStage = OPEN_OPP_STAGES.map((st) => {
-      const os = open.filter((o) => o.stage === st)
+    const byStage = OPP_STAGES.map((st) => {
+      const os = book.opportunities.filter((o) => o.stage === st)
       return { st, n: os.length, v: os.reduce((s, o) => s + o.arr, 0) }
     })
     const negotiating = book.contracts.filter((c) => c.status === 'In Negotiation')
-    return { arr, open, uplift, underpriced, support, week, byStage, negotiating }
+    return { arr, open, uplift, underpriced, wonRecent, week, byStage, negotiating }
   }, [book])
   const drafts = outreach.filter((o) => o.status === 'Draft').length
   const pricingMoves = Object.entries(book.pricing)
@@ -50,7 +49,7 @@ export default function Dashboard() {
     <div>
       <PageHeader
         title="Dashboard"
-        subtitle={`${num(book.customers.length)} customers and ${num(book.accounts.filter((a) => a.status === 'Prospect').length)} prospects across hog and cattle operations.`}
+        subtitle={`${num(book.customers.length)} customers and ${num(book.accounts.filter((a) => a.status === 'Prospect').length)} prospects across hog, cattle and field-crop operations.`}
         actions={
           <Link
             to="/signals?tab=newsletter"
@@ -69,7 +68,7 @@ export default function Dashboard() {
           <div className="mt-3 text-[14px] text-muted">Annualized from active subscriptions</div>
           <dl className="mt-8 grid grid-cols-2 gap-x-6 gap-y-6 border-t border-line pt-6 sm:grid-cols-3">
             <Figure label="Open pipeline" value={money(m.open.reduce((s, o) => s + o.arr, 0))} sub={`${num(m.open.length)} ${m.open.length === 1 ? 'opportunity' : 'opportunities'}`} />
-            <Figure label="Need support" value={m.support.length} sub="Weather or health risk" />
+            <Figure label="Won in the last 90 days" value={money(m.wonRecent.reduce((s, o) => s + o.arr, 0))} sub={`${num(m.wonRecent.length)} ${m.wonRecent.length === 1 ? 'deal' : 'deals'}`} />
             <Figure label="Signals this week" value={m.week.length} sub="Org and market changes" />
           </dl>
         </section>
@@ -123,7 +122,7 @@ export default function Dashboard() {
                     <Chip tone={r.type === 'Price Normalization' ? 'accent' : 'neutral'}>{r.type}</Chip>
                     <span className="text-[12px] text-muted">{r.stage}</span>
                   </div>
-                  <div className="mt-1 truncate text-[13px] text-ink-2">{r.reasons[0] ?? `${r.account.segment}, ${num(r.account.headCount)} head`}</div>
+                  <div className="mt-1 truncate text-[13px] text-ink-2">{r.reasons[0] ?? `${r.account.segment}, ${sizeLabel(r.account)}`}</div>
                 </div>
                 <div className="shrink-0 text-right">
                   <div className="tabular text-[15px] text-ink">{money(r.arr)}</div>
@@ -134,39 +133,6 @@ export default function Dashboard() {
           </ol>
         </Card>
 
-        <Card
-          title="Customers who need support this week"
-          pad={false}
-          action={
-            <Link to="/weather">
-              <TextLink>Weather and health</TextLink>
-            </Link>
-          }
-        >
-          <div className="meta px-5 pb-2 text-muted">{book.weather.status === 'loading' ? 'Loading forecast…' : book.weather.source}</div>
-          <ul className="divide-y divide-line">
-            {m.support.slice(0, 8).map((a) => (
-              <li key={a.id} className="flex items-center justify-between gap-3 px-5 py-3">
-                <div className="min-w-0">
-                  <Link to={`/accounts/${a.id}`} className={`block truncate text-[15px] ${nameLink}`}>
-                    {a.name}
-                  </Link>
-                  <div className="truncate text-[13px] text-muted">
-                    {a.segment}, {a.county} Co., {a.state}
-                  </div>
-                </div>
-                <div className="flex shrink-0 flex-col items-end gap-1">
-                  <WeatherBadge w={book.weatherRisk[a.id]} compact />
-                  <HealthBadge h={book.health[a.id]} />
-                </div>
-              </li>
-            ))}
-            {!m.support.length && <li className="px-5 py-8 text-center text-[14px] text-muted">No customers flagged for weather or health risk.</li>}
-          </ul>
-        </Card>
-      </div>
-
-      <div className="mt-5 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         <Card
           title="Pipeline by stage"
           action={
@@ -185,10 +151,15 @@ export default function Dashboard() {
               ),
               value: s.v,
               display: money(s.v),
+              // Open stages in ink; won, lost and on-ice deals recede.
+              color: isOpenStage(s.st) ? undefined : 'var(--color-seq-3)',
             }))}
           />
+          <p className="mt-4 text-[13px] text-muted">Prospect, Demo and Negotiation make up the open pipeline. Closed and on-ice deals are shown for context.</p>
         </Card>
+      </div>
 
+      <div className="mt-5 grid gap-5 md:grid-cols-2">
         <Card
           title="Biggest pricing moves"
           pad={false}
@@ -220,7 +191,6 @@ export default function Dashboard() {
         </Card>
 
         <Card
-          className="md:col-span-2 xl:col-span-1"
           title={
             <span className="inline-flex items-center gap-2.5">
               <LucasMark size={28} />
@@ -230,7 +200,7 @@ export default function Dashboard() {
           pad={false}
           action={
             <Link to="/contracts">
-              <TextLink>All contracts</TextLink>
+              <TextLink>Open Lucas the Hog</TextLink>
             </Link>
           }
         >
@@ -259,7 +229,7 @@ export default function Dashboard() {
 
       <Card
         className="mt-5"
-        title="Latest changes across hog and cattle operations"
+        title="Latest changes across hog, cattle and field-crop operations"
         pad={false}
         action={
           <Link to="/signals">

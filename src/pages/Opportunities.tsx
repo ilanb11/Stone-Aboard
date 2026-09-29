@@ -5,7 +5,7 @@ import { useBook } from '../lib/useData'
 import { useCrm } from '../store'
 import { TEAM } from '../data/generate'
 import { PRODUCT } from '../data/products'
-import { OPP_STAGES, type OppStage } from '../types'
+import { OPERATION_OPTIONS, OPP_STAGES, isClosedStage, type Species } from '../types'
 import { Card, Chip, PageHeader, Select, Tabs, TextInput } from '../components/ui'
 import { initials, money, shortDate } from '../lib/format'
 
@@ -26,7 +26,7 @@ export default function Opportunities() {
   const [params] = useSearchParams()
   const [view, setView] = useState<'ranked' | 'board'>(params.get('view') === 'board' ? 'board' : 'ranked')
   const [type, setType] = useState('All')
-  const [species, setSpecies] = useState('All')
+  const [species, setSpecies] = useState<'All' | Species>('All')
   const [rep, setRep] = useState('All')
   const [q, setQ] = useState('')
   const [drag, setDrag] = useState<string | null>(null)
@@ -56,7 +56,7 @@ export default function Opportunities() {
       <div className="mb-5 flex flex-wrap items-end gap-3">
         <TextInput label="Search" value={q} onChange={setQ} placeholder="Account name" className="w-full sm:w-64" />
         <Select label="Type" value={type} onChange={setType} options={['All', 'New Logo', 'Expansion', 'Renewal', 'Price Normalization']} />
-        <Select label="Species" value={species} onChange={setSpecies} options={['All', 'Hog', 'Cattle']} />
+        <Select label="Operation" value={species} onChange={setSpecies} options={OPERATION_OPTIONS} />
         <Select label="Rep" value={rep} onChange={setRep} options={['All', ...TEAM]} />
       </div>
 
@@ -138,7 +138,7 @@ export default function Opportunities() {
                 key={stage}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={() => {
-                  if (drag) moveOpp(drag, stage as OppStage)
+                  if (drag) moveOpp(drag, stage)
                   setDrag(null)
                 }}
                 className="flex w-72 shrink-0 flex-col rounded-[var(--radius-card)] bg-accent-soft"
@@ -171,10 +171,13 @@ export default function Opportunities() {
                           <span className="tabular text-[14px] font-medium text-ink">{money(o.arr)}</span>
                         </div>
                         <div className="mt-2 truncate text-[12px] text-ink-2">{o.products.map((p) => PRODUCT[p].name).join(', ')}</div>
-                        <div className="meta mt-1 text-muted">Closes {shortDate(o.closeDate)}</div>
+                        <div className="meta mt-1 text-muted">
+                          {isClosedStage(o.stage) ? 'Closed' : o.stage === 'On Ice' ? 'Revisit' : 'Closes'} {shortDate(o.closeDate)}
+                        </div>
+                        {o.reason && <div className="mt-1.5 text-[12px] text-ink-2">{o.reason}</div>}
                         {o.contractId && (
                           <Link to={`/contracts/${o.contractId}`} className="mt-2 inline-flex items-center gap-1.5 text-[12px] text-ink underline-offset-4 hover:underline">
-                            <FileSignature size={12} aria-hidden /> Lucas redlines
+                            <FileSignature size={12} aria-hidden /> Redlines in Lucas the Hog
                           </Link>
                         )}
                       </div>

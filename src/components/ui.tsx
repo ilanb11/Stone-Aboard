@@ -1,7 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { AlertOctagon, AlertTriangle, CheckCircle2, CircleDot, CloudRain, Snowflake, Sun, Wind, type LucideIcon } from 'lucide-react'
 import type { WeatherRisk } from '../lib/weather'
-import type { Health } from '../lib/scoring'
 
 // Design system primitives. Visual language: black ink on white, pill controls,
 // 20px cards with hairline borders and no shadows, serif figures for key numbers,
@@ -75,16 +74,8 @@ export function Chip({ children, tone = 'neutral' }: { children: ReactNode; tone
   return <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[12px] font-medium ${cls}`}>{children}</span>
 }
 
-export function HealthBadge({ h }: { h?: Health }) {
-  if (!h) return <span className="text-[13px] text-muted">None</span>
-  const tone: Tone = h.level === 'Healthy' ? 'good' : h.level === 'Watch' ? 'warning' : 'critical'
-  return (
-    <StatusBadge tone={tone} title={h.parts.map((p) => `${p.label}: ${p.value}`).join('\n')}>
-      {h.level} <span className="tabular text-muted">{h.score}</span>
-    </StatusBadge>
-  )
-}
-
+// Weather badge: not shown on any page right now; kept with the Open-Meteo integration
+// (src/lib/weather.ts) so the newsletter can reuse it.
 const KIND_ICON = { heat: Sun, cold: Snowflake, rain: CloudRain, dry: Wind }
 export function weatherTone(risk: number): Tone {
   return risk >= 70 ? 'critical' : risk >= 45 ? 'serious' : risk >= 22 ? 'warning' : 'good'

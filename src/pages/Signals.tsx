@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { AlertOctagon, Copy, Mail } from 'lucide-react'
 import { useBook, signals } from '../lib/useData'
 import { useCrm } from '../store'
-import type { OutreachStatus, Signal, SignalType } from '../types'
+import { OPERATION_OPTIONS, type OutreachStatus, type Signal, type SignalType, type Species } from '../types'
 import { STATES } from '../data/geo'
 import { Button, Card, Chip, Notice, PageHeader, Pill, Select, StatusBadge, Tabs, TextInput, TextLink } from '../components/ui'
 import { num, shortDate } from '../lib/format'
@@ -79,7 +79,7 @@ function Newsletter() {
     return s
   })
   const [wk, setWk] = useState(weeks[0].toISOString())
-  const [species, setSpecies] = useState<'All' | 'Hog' | 'Cattle'>('All')
+  const [species, setSpecies] = useState<'All' | Species>('All')
   const [copied, setCopied] = useState<'copied' | 'failed' | null>(null)
   useEffect(() => {
     if (!copied) return
@@ -98,28 +98,19 @@ function Newsletter() {
   const custHit = [...new Set(items.filter((s) => s.accountId && book.byId[s.accountId].status === 'Customer').map((s) => s.accountId!))]
   const sent = outreach.filter((o) => o.sentAt && new Date(o.sentAt) >= start && new Date(o.sentAt) < end)
   const headAdded = by('Expansion').reduce((s, x) => s + (Number(x.headline.match(/\+([\d,]+) head/)?.[1]?.replace(/,/g, '')) || 0), 0)
-  const hotStates = Object.entries(book.weather.byState)
-    .map(([code]) => {
-      const accts = book.customers.filter((a) => a.state === code)
-      const avg = accts.length ? accts.reduce((s, a) => s + (book.weatherRisk[a.id]?.risk ?? 0), 0) / accts.length : 0
-      const worst = accts.map((a) => book.weatherRisk[a.id]).sort((x, y) => (y?.risk ?? 0) - (x?.risk ?? 0))[0]
-      return { code, avg, worst, n: accts.length }
-    })
-    .filter((x) => x.n && x.avg >= 22)
-    .sort((a, b) => b.avg - a.avg)
-    .slice(0, 5)
+  const acresAdded = by('Expansion').reduce((s, x) => s + (Number(x.headline.match(/adds ([\d,]+) acres/)?.[1]?.replace(/,/g, '')) || 0), 0)
 
   const sections: [string, Signal[]][] = [
     ['Ownership and M&A', by('Ownership Change')],
     ['Leadership moves', by('Leadership Change')],
     ['Expansions', by('Expansion')],
     ['Contractions and closures', by('Contraction')],
-    ['Integrator and packer moves', by('Integrator / Packer Change')],
-    ['Biosecurity watch', by('Biosecurity')],
+    ['Integrator, packer and grain marketing moves', by('Integrator / Packer Change')],
+    ['Animal and crop health', by('Biosecurity')],
     ['Regulatory', by('Regulatory')],
     ['Financial', by('Financial')],
   ]
-  const masthead = 'The Hog & Herd Brief'
+  const masthead = 'The Hog, Herd & Field Brief'
   const weekLabel = `Week of ${start.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`
 
   const asText = () =>
@@ -127,12 +118,9 @@ function Newsletter() {
       masthead,
       weekLabel,
       '',
-      `${plural(items.length, 'change')} tracked, ${plural(by('Ownership Change').length, 'ownership change')}, ${plural(by('Leadership Change').length, 'leadership move')}, ${num(headAdded)} hog head of new barn capacity permitted.`,
+      `${plural(items.length, 'change')} tracked, ${plural(by('Ownership Change').length, 'ownership change')}, ${plural(by('Leadership Change').length, 'leadership move')}, ${num(headAdded)} hog head of new barn capacity permitted, ${num(acresAdded)} acres of new cropland.`,
       '',
       ...sections.flatMap(([h, list]) => (list.length ? [`## ${h}`, ...list.map((s) => `- ${s.headline} (${shortDate(s.date)})${s.accountId ? ` [${book.byId[s.accountId].status}]` : ''}`), ''] : [])),
-      hotStates.length ? '## Weather outlook' : '',
-      ...hotStates.map((h) => `- ${STATES[h.code].name}: ${h.worst?.label} affecting ${plural(h.n, 'customer operation')}`),
-      '',
       `## Your book: ${plural(custHit.length, 'customer')} affected, ${plural(sent.length, 'outreach message')} sent`,
     ].join('\n')
 
@@ -150,6 +138,7 @@ function Newsletter() {
     ['Ownership changes', num(by('Ownership Change').length)],
     ['Leadership moves', num(by('Leadership Change').length)],
     ['New hog capacity', num(headAdded), 'head'],
+    ['New cropland', num(acresAdded), 'acres'],
   ]
 
   return (
@@ -157,9 +146,9 @@ function Newsletter() {
       <div className="no-print mb-5 flex flex-wrap items-end gap-3">
         <Select label="Week" value={wk} onChange={setWk} options={weeks.map((w) => ({ value: w.toISOString(), label: `Week of ${w.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` }))} />
         <div className="flex flex-wrap items-center gap-1.5 pb-0.5">
-          {(['All', 'Hog', 'Cattle'] as const).map((s) => (
-            <Pill key={s} active={species === s} onClick={() => setSpecies(s)}>
-              {s === 'All' ? 'Hog and cattle' : s}
+          {OPERATION_OPTIONS.map((o) => (
+            <Pill key={o.value} active={species === o.value} onClick={() => setSpecies(o.value)}>
+              {o.label}
             </Pill>
           ))}
         </div>
@@ -185,13 +174,13 @@ function Newsletter() {
           </div>
           <h2 className="display mt-5 text-[40px] text-ink sm:text-[56px]">{masthead}</h2>
           <p className="mt-5 max-w-[60ch] text-[17px] leading-[1.6] text-ink-2">
-            Changes to hog and cattle operations this week: ownership, leadership, capacity, integrators, biosecurity and regulation, and what they mean for our accounts.
+            Changes to hog, cattle and field-crop operations this week: ownership, leadership, capacity, integrators and grain marketing, animal and crop health, and regulation, and what they mean for our accounts.
           </p>
         </header>
 
         {/* Four columns only when the article itself is wide enough; the rail makes viewport breakpoints unreliable here. */}
         <div className="@container mt-10 border-t border-line pt-6">
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-6 @xl:grid-cols-4">
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-6 @xl:grid-cols-3 @3xl:grid-cols-5">
             {figures.map(([label, value, unit]) => (
               <div key={label} className="min-w-0">
                 <dt className="text-[13px] text-ink-2">{label}</dt>
@@ -232,24 +221,6 @@ function Newsletter() {
           ) : null,
         )}
 
-        {hotStates.length > 0 && (
-          <section className="mt-12">
-            <SectionHeading>Weather outlook for the next 7 days</SectionHeading>
-            <ul className="mt-5 flex max-w-[68ch] flex-col gap-5">
-              {hotStates.map((h) => (
-                <li key={h.code}>
-                  <div className="text-[16px] font-medium leading-snug text-ink">{STATES[h.code].name}</div>
-                  <p className="mt-1 text-[15px] leading-[1.7] text-ink-2">
-                    {h.worst?.label}: {h.worst?.detail}.
-                  </p>
-                  <div className="mt-1 text-[13px] text-muted">{plural(h.n, 'customer operation')} in the area</div>
-                </li>
-              ))}
-            </ul>
-            <div className="meta mt-4 text-muted">Source: {book.weather.source}</div>
-          </section>
-        )}
-
         <section className="mt-12 rounded-[14px] bg-accent-soft px-5 py-4 text-[15px] leading-relaxed text-ink">
           <span className="font-medium">Your book.</span>{' '}
           <span className="text-ink-2">
@@ -268,7 +239,7 @@ export default function Signals() {
   const [type, setType] = useState('All')
   const [scope, setScope] = useState<'all' | 'customers' | 'prospects' | 'market'>('all')
   const [days, setDays] = useState('30')
-  const [species, setSpecies] = useState('All')
+  const [species, setSpecies] = useState<'All' | Species>('All')
   const [q, setQ] = useState('')
   const feed = useMemo(() => {
     const cut = Date.now() - Number(days) * 86400000
@@ -287,7 +258,7 @@ export default function Signals() {
 
   return (
     <div>
-      <PageHeader title="Signals and newsletter" subtitle="Every change to a hog or cattle operation: ownership, leadership, capacity, integrator, biosecurity and regulation. Any change can start an outreach message." />
+      <PageHeader title="Signals and newsletter" subtitle="Every change to a hog, cattle or field-crop operation: ownership, leadership, capacity, integrator or grain marketing, animal and crop health, and regulation. Any change can start an outreach message." />
       <Tabs value={tab} onChange={setTab} tabs={[{ value: 'feed', label: 'Change feed' }, { value: 'newsletter', label: 'Weekly newsletter' }]} />
       {tab === 'newsletter' ? (
         <Newsletter />
@@ -296,7 +267,7 @@ export default function Signals() {
           <div className="flex flex-wrap items-end gap-3">
             <TextInput label="Search" value={q} onChange={setQ} placeholder="Headline or detail" className="w-full sm:w-64" />
             <Select label="Type" value={type} onChange={setType} options={['All', ...TYPES]} />
-            <Select label="Species" value={species} onChange={setSpecies} options={['All', 'Hog', 'Cattle']} />
+            <Select label="Operation" value={species} onChange={setSpecies} options={OPERATION_OPTIONS} />
             <Select label="Period" value={days} onChange={setDays} options={[{ value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: '120', label: 'Last 120 days' }]} />
             <div className="flex flex-wrap items-center gap-1.5 pb-0.5">
               {(['all', 'customers', 'prospects', 'market'] as const).map((s) => (

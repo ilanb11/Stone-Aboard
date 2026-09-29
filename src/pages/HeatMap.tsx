@@ -1,29 +1,47 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { CloudRain } from 'lucide-react'
 import { useBook, signals } from '../lib/useData'
 import { STATES, STATE_LIST } from '../data/geo'
-import { OPEN_OPP_STAGES, type Species } from '../types'
+import { OPERATION_OPTIONS, OPERATION_TYPES, isOpenStage, type Account, type Species } from '../types'
 import { USMap, type MapPoint } from '../components/USMap'
-import { Card, Chip, PageHeader, Pill, Select, TextLink, WeatherBadge } from '../components/ui'
-import { money, num, shortDate } from '../lib/format'
-import { toF, thi } from '../lib/weather'
+import { Card, Chip, PageHeader, Pill, Select, TextLink } from '../components/ui'
+import { money, num, shortDate, sizeLabel } from '../lib/format'
 import { mrr } from '../lib/pricing'
 
-type Metric = 'inventory' | 'customers' | 'arr' | 'whitespace' | 'penetration' | 'pipeline' | 'signals' | 'weather'
-const METRICS: { value: Metric; label: string }[] = [
-  { value: 'inventory', label: 'Animal inventory (market size)' },
-  { value: 'whitespace', label: 'Prospect head count (white space)' },
+type Metric = 'market' | 'customers' | 'arr' | 'prospects' | 'penetration' | 'pipeline' | 'signals'
+type Filter = 'All' | Species
+
+const MARKET_LABEL: Record<Filter, string> = {
+  Hog: 'Hog inventory (market size)',
+  Cattle: 'Cattle inventory (market size)',
+  Grain: 'Crop acres planted (market size)',
+  All: 'Share of U.S. hogs, cattle and crop acres',
+}
+const metricsFor = (f: Filter): { value: Metric; label: string }[] => [
+  { value: 'market', label: MARKET_LABEL[f] },
+  { value: 'prospects', label: 'Prospects (white space)' },
   { value: 'customers', label: 'Customers' },
   { value: 'arr', label: 'Customer ARR' },
-  { value: 'penetration', label: 'Market penetration (% of head)' },
+  { value: 'penetration', label: f === 'Grain' ? 'Market penetration (% of crop acres)' : f === 'All' ? 'Market penetration (average %)' : 'Market penetration (% of head)' },
   { value: 'pipeline', label: 'Open pipeline ARR' },
   { value: 'signals', label: 'Change signals (30 days)' },
-  { value: 'weather', label: 'Weather risk (next 7 days)' },
 ]
 // Written out in full: Tailwind only emits theme variables it finds literally in source.
 const SEQ = ['var(--color-seq-1)', 'var(--color-seq-2)', 'var(--color-seq-3)', 'var(--color-seq-4)', 'var(--color-seq-5)']
-const WARM = ['var(--color-warm-1)', 'var(--color-warm-2)', 'var(--color-warm-3)', 'var(--color-warm-4)', 'var(--color-warm-5)']
+
+// Map markers: hog = lime, cattle = white, field crops = ink with a light ring.
+const MARKER: Record<Species, { color: string; ring?: string }> = {
+  Hog: { color: 'var(--color-cat-2)' },
+  Cattle: { color: 'var(--color-cat-3)' },
+  Grain: { color: 'var(--color-cat-1)', ring: 'var(--color-surface)' },
+}
+const MARKER_LABEL: Record<Species, string> = { Hog: 'Hog', Cattle: 'Cattle', Grain: 'Field crops' }
+
+/** State market size in the operation's own unit (million head or million acres). */
+const market = (code: string, sp: Species) => (sp === 'Hog' ? STATES[code].hogs : sp === 'Cattle' ? STATES[code].cattle : STATES[code].crops)
+const US_TOTAL: Record<Species, number> = Object.fromEntries(OPERATION_TYPES.map((sp) => [sp, STATE_LIST.reduce((s, st) => s + market(st.code, sp), 0)])) as Record<Species, number>
+/** Customer size in the same unit as `market` (a sow farm's pigs = sows x 11). */
+const units = (a: Account) => (a.species === 'Grain' ? a.acres : a.segment === 'Sow Farm' ? a.headCount * 11 : a.headCount)
 
 const nameLink = 'text-ink underline-offset-4 hover:underline'
 
@@ -49,97 +67,106 @@ function StateFigure({ label, value }: { label: string; value: ReactNode }) {
   )
 }
 
+const millions = (v: number) => `${v.toFixed(v < 1 ? 2 : 1)}M`
+
 export default function HeatMap() {
   const book = useBook()
   const nav = useNavigate()
-  const [metric, setMetric] = useState<Metric>('inventory')
-  const [species, setSpecies] = useState<'All' | Species>('Hog')
+  const [metric, setMetric] = useState<Metric>('market')
+  const [filter, setFilter] = useState<Filter>('Hog')
   const [dots, setDots] = useState<'none' | 'Customer' | 'Prospect'>('Customer')
   const [sel, setSel] = useState<string>('IA')
+  const inFilter = (sp: Species) => filter === 'All' || sp === filter
 
   const agg = useMemo(() => {
-    const out: Record<string, { customers: number; prospects: number; arr: number; custHead: number; prospectHead: number; pipeline: number; signals: number; weather: number; wn: number }> = {}
-    for (const s of STATE_LIST) out[s.code] = { customers: 0, prospects: 0, arr: 0, custHead: 0, prospectHead: 0, pipeline: 0, signals: 0, weather: 0, wn: 0 }
-    const inSpecies = (sp: Species) => species === 'All' || sp === species
+    type Row = { customers: number; prospects: number; arr: number; custUnits: Record<Species, number>; pipeline: number; signals: number }
+    const out: Record<string, Row> = {}
+    for (const s of STATE_LIST) out[s.code] = { customers: 0, prospects: 0, arr: 0, custUnits: { Hog: 0, Cattle: 0, Grain: 0 }, pipeline: 0, signals: 0 }
     for (const a of book.accounts) {
-      if (!inSpecies(a.species)) continue
+      if (!inFilter(a.species)) continue
       const g = out[a.state]
       if (a.status === 'Customer') {
         g.customers++
         g.arr += mrr(a) * 12
-        g.custHead += a.segment === 'Sow Farm' ? a.headCount * 11 : a.headCount
-        g.weather += book.weatherRisk[a.id]?.risk ?? 0
-        g.wn++
-      } else if (a.status === 'Prospect') {
-        g.prospects++
-        g.prospectHead += a.headCount
-      }
+        g.custUnits[a.species] += units(a)
+      } else if (a.status === 'Prospect') g.prospects++
     }
     for (const o of book.opportunities) {
       const a = book.byId[o.accountId]
-      if (OPEN_OPP_STAGES.includes(o.stage) && inSpecies(a.species)) out[a.state].pipeline += o.arr
+      if (isOpenStage(o.stage) && inFilter(a.species)) out[a.state].pipeline += o.arr
     }
     const cutoff = Date.now() - 30 * 86400000
-    for (const s of signals) if (s.state && new Date(s.date).getTime() > cutoff && (!s.accountId || inSpecies(book.byId[s.accountId].species))) out[s.state].signals++
+    for (const s of signals) if (s.state && new Date(s.date).getTime() > cutoff && (!s.accountId || inFilter(book.byId[s.accountId].species))) out[s.state].signals++
     return out
-  }, [book, species])
+  }, [book, filter])
 
-  const inventory = (code: string) => (species === 'Hog' ? STATES[code].hogs : species === 'Cattle' ? STATES[code].cattle : STATES[code].hogs + STATES[code].cattle)
+  const kinds: Species[] = filter === 'All' ? [...OPERATION_TYPES] : [filter]
   const value = (code: string): number => {
     const g = agg[code]
     switch (metric) {
-      case 'inventory': return inventory(code)
+      case 'market':
+        // One type: its own unit. All: the state's average share of the U.S. total, in %.
+        return filter === 'All' ? (kinds.reduce((s, sp) => s + market(code, sp) / US_TOTAL[sp], 0) / kinds.length) * 100 : market(code, filter)
+      case 'penetration': {
+        const shares = kinds.filter((sp) => market(code, sp) > 0).map((sp) => (g.custUnits[sp] / (market(code, sp) * 1e6)) * 100)
+        return shares.length ? shares.reduce((s, x) => s + x, 0) / shares.length : 0
+      }
       case 'customers': return g.customers
       case 'arr': return g.arr
-      case 'whitespace': return g.prospectHead
-      case 'penetration': return inventory(code) > 0 ? (g.custHead / (inventory(code) * 1e6)) * 100 : 0
+      case 'prospects': return g.prospects
       case 'pipeline': return g.pipeline
       case 'signals': return g.signals
-      case 'weather': return g.wn ? g.weather / g.wn : 0
     }
   }
   const vals = STATE_LIST.map((s) => value(s.code)).sort((a, b) => a - b)
   const nonzero = vals.filter((v) => v > 0)
   const q = (p: number) => nonzero[Math.floor(p * (nonzero.length - 1))] ?? 0
   const breaks = [q(0.2), q(0.4), q(0.6), q(0.8)]
-  const ramp = metric === 'weather' ? WARM : SEQ
   const fill = (code: string) => {
     const v = value(code)
     if (v <= 0) return 'var(--color-surface-2)'
-    return ramp[breaks.filter((b) => v > b).length]
+    return SEQ[breaks.filter((b) => v > b).length]
   }
-  const fmt = (v: number) =>
-    metric === 'inventory' ? (v < 1 ? `${Math.round(v * 1000)}K head` : `${v.toFixed(1)}M head`) : metric === 'arr' || metric === 'pipeline' ? money(v) : metric === 'penetration' ? `${v.toFixed(2)}%` : metric === 'weather' ? v.toFixed(0) : num(v)
-  const metricLabel = METRICS.find((m) => m.value === metric)!.label
+  const fmt = (v: number) => {
+    if (metric === 'market') {
+      if (filter === 'All') return `${v.toFixed(1)}%`
+      const unit = filter === 'Grain' ? 'acres' : 'head'
+      return v < 1 ? `${Math.round(v * 1000)}K ${unit}` : `${v.toFixed(1)}M ${unit}`
+    }
+    if (metric === 'arr' || metric === 'pipeline') return money(v)
+    if (metric === 'penetration') return `${v.toFixed(2)}%`
+    return num(v)
+  }
+  const metrics = metricsFor(filter)
+  const metricLabel = metrics.find((m) => m.value === metric)!.label
 
   const points: MapPoint[] = useMemo(
     () =>
       dots === 'none'
         ? []
         : book.accounts
-            .filter((a) => a.status === dots && (species === 'All' || a.species === species))
-            .map((a) => ({ id: a.id, lon: a.lon, lat: a.lat, r: Math.max(2.5, Math.min(7, Math.log10(a.headCount + 10) * 1.4)), color: a.species === 'Hog' ? 'var(--color-cat-2)' : 'var(--color-cat-3)' })),
-    [book, dots, species],
+            .filter((a) => a.status === dots && inFilter(a.species))
+            .map((a) => ({ id: a.id, lon: a.lon, lat: a.lat, r: Math.max(2.5, Math.min(7, Math.log10((a.species === 'Grain' ? a.acres * 2 : a.headCount) + 10) * 1.4)), ...MARKER[a.species] })),
+    [book, dots, filter],
   )
 
   const st = STATES[sel]
   const g = agg[sel]
-  const stateAccounts = book.accounts.filter((a) => a.state === sel && (species === 'All' || a.species === species))
-  const top = book.ranked.filter((r) => r.account.state === sel && (species === 'All' || r.account.species === species)).slice(0, 5)
+  const stateAccounts = book.accounts.filter((a) => a.state === sel && inFilter(a.species))
+  const top = book.ranked.filter((r) => r.account.state === sel && inFilter(r.account.species)).slice(0, 5)
   const stateSignals = signals.filter((s) => s.state === sel).slice(0, 5)
-  const forecast = book.weather.byState[sel]
 
   return (
     <div>
-      <PageHeader title="Heat map" subtitle="Where the animals are, where we already sell, and where the opportunity is. Select a state to see its details." />
+      <PageHeader title="Heat map" subtitle="Where the herds and crop acres are, where we already sell, and where the opportunity is. Select a state to see its details." />
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_390px]">
         <Card className="self-start" pad={false}>
           <div className="flex flex-wrap items-end gap-x-6 gap-y-4 px-5 pt-5">
-            <Select label="Color states by" value={metric} onChange={setMetric} options={METRICS} className="w-full sm:w-auto" />
-            <Control label="Species">
-              {(['Hog', 'Cattle', 'All'] as const).map((s) => (
-                <Pill key={s} active={species === s} onClick={() => setSpecies(s)}>
-                  {s === 'All' ? 'Hog and cattle' : s}
+            <Select label="Color states by" value={metric} onChange={setMetric} options={metrics} className="w-full sm:w-auto" />
+            <Control label="Operation">
+              {OPERATION_OPTIONS.map((o) => (
+                <Pill key={o.value} active={filter === o.value} onClick={() => setFilter(o.value)}>
+                  {o.value === 'All' ? 'All' : o.label}
                 </Pill>
               ))}
             </Control>
@@ -175,7 +202,7 @@ export default function HeatMap() {
                   <div>
                     <div className="font-medium">{a.name}</div>
                     <div className="text-ink-2">
-                      {a.segment}, {num(a.headCount)} head
+                      {a.segment}, {sizeLabel(a)}
                     </div>
                     <div className="text-muted">
                       {a.county} Co., {a.state}
@@ -190,7 +217,7 @@ export default function HeatMap() {
                 <span className="inline-flex items-center gap-2">
                   <span className="tabular">{fmt(nonzero[0] ?? 0)}</span>
                   <span className="flex overflow-hidden rounded-full" aria-hidden>
-                    {ramp.map((c) => (
+                    {SEQ.map((c) => (
                       <span key={c} className="h-2.5 w-7" style={{ background: c }} />
                     ))}
                   </span>
@@ -203,15 +230,13 @@ export default function HeatMap() {
               </div>
               {dots !== 'none' && (
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="h-2.5 w-2.5 rounded-full border border-ink" style={{ background: 'var(--color-cat-2)' }} aria-hidden />
-                    Hog
-                  </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="h-2.5 w-2.5 rounded-full border border-ink" style={{ background: 'var(--color-cat-3)' }} aria-hidden />
-                    Cattle
-                  </span>
-                  <span className="text-muted">Marker size shows head count</span>
+                  {kinds.map((sp) => (
+                    <span key={sp} className="inline-flex items-center gap-1.5">
+                      <span className="h-2.5 w-2.5 rounded-full border border-ink" style={{ background: MARKER[sp].color }} aria-hidden />
+                      {MARKER_LABEL[sp]}
+                    </span>
+                  ))}
+                  <span className="text-muted">Marker size shows head count or acres</span>
                 </div>
               )}
             </div>
@@ -223,49 +248,19 @@ export default function HeatMap() {
             <h2 className="display text-[32px] text-ink">{st.name}</h2>
             <div className="mt-1.5 text-[13px] text-muted">{st.region}</div>
             <div className="mt-5 grid grid-cols-3 gap-x-4 gap-y-5">
-              <StateFigure label="Hogs" value={`${st.hogs.toFixed(st.hogs < 1 ? 2 : 1)}M`} />
-              <StateFigure label="Cattle" value={`${st.cattle.toFixed(1)}M`} />
-              <StateFigure label="ARR" value={money(g.arr)} />
+              <StateFigure label="Hogs (head)" value={millions(st.hogs)} />
+              <StateFigure label="Cattle (head)" value={millions(st.cattle)} />
+              <StateFigure label="Crop acres" value={millions(st.crops)} />
               <StateFigure label="Customers" value={g.customers} />
-              <StateFigure label="Prospects" value={g.prospects} />
+              <StateFigure label="ARR" value={money(g.arr)} />
               <StateFigure label="Pipeline" value={money(g.pipeline)} />
             </div>
             <Link to={`/accounts?state=${sel}`} className="mt-5 inline-block">
               <TextLink>
-                View {stateAccounts.length} {stateAccounts.length === 1 ? 'account' : 'accounts'}
+                View {stateAccounts.length} {stateAccounts.length === 1 ? 'account' : 'accounts'}, including {g.prospects} {g.prospects === 1 ? 'prospect' : 'prospects'}
               </TextLink>
             </Link>
           </section>
-
-          {forecast && (
-            <Card title="7-day outlook">
-              <ol className="grid grid-cols-7 gap-1.5 text-center" aria-label="7-day forecast">
-                {forecast.map((d) => {
-                  const weekday = new Date(d.date + 'T12:00').toLocaleDateString('en-US', { weekday: 'short' })
-                  return (
-                    <li
-                      key={d.date}
-                      className="min-w-0 rounded-[14px] bg-accent-soft px-0.5 py-2.5"
-                      title={`${weekday}: high ${toF(d.tmax)}°F, low ${toF(d.tmin)}°F, THI ${Math.round(thi(d.tmax, d.rh))}`}
-                    >
-                      <div className="text-[12px] text-muted">{weekday}</div>
-                      <div className="tabular mt-1 text-[15px] text-ink">{toF(d.tmax)}°</div>
-                      <div className="tabular text-[12px] text-muted">{toF(d.tmin)}°</div>
-                      <div className="tabular mx-1.5 mt-1.5 border-t border-line pt-1.5 text-[12px] text-ink-2">{Math.round(thi(d.tmax, d.rh))}</div>
-                      {d.precip >= 5 && (
-                        <div className="tabular mt-0.5 inline-flex items-center gap-0.5 text-[11px] text-ink" title="Rain">
-                          <CloudRain size={10} strokeWidth={2.25} aria-hidden />
-                          {(d.precip / 25.4).toFixed(1)}"
-                        </div>
-                      )}
-                    </li>
-                  )
-                })}
-              </ol>
-              <p className="mt-2 text-[12px] text-muted">Daily high, low and THI.{forecast.some((d) => d.precip >= 5) ? ' Rain in inches.' : ''}</p>
-              <div className="meta mt-1 text-muted">{book.weather.source}</div>
-            </Card>
-          )}
 
           <Card title="Top opportunities" pad={false}>
             <ul className="divide-y divide-line">
@@ -301,25 +296,6 @@ export default function HeatMap() {
               {!stateSignals.length && <li className="px-5 pb-3 pt-2 text-[14px] text-muted">No recent signals in {st.name}.</li>}
             </ul>
           </Card>
-
-          {stateAccounts.some((a) => a.status === 'Customer') && (
-            <Card title="Customers by weather risk" pad={false}>
-              <ul className="divide-y divide-line">
-                {stateAccounts
-                  .filter((a) => a.status === 'Customer')
-                  .sort((a, b) => (book.weatherRisk[b.id]?.risk ?? 0) - (book.weatherRisk[a.id]?.risk ?? 0))
-                  .slice(0, 5)
-                  .map((a) => (
-                    <li key={a.id} className="flex items-center justify-between gap-3 px-5 py-3 text-[14px]">
-                      <Link to={`/accounts/${a.id}`} className={`min-w-0 truncate ${nameLink}`}>
-                        {a.name}
-                      </Link>
-                      <WeatherBadge w={book.weatherRisk[a.id]} compact />
-                    </li>
-                  ))}
-              </ul>
-            </Card>
-          )}
         </div>
       </div>
     </div>

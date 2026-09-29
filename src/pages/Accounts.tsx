@@ -4,13 +4,19 @@ import { AlertOctagon, ArrowDown, ArrowUp, ArrowUpDown, Copy, Download } from 'l
 import { useBook, signalsByAccount } from '../lib/useData'
 import { STATE_LIST } from '../data/geo'
 import { TEAM } from '../data/generate'
-import type { Account, Segment } from '../types'
-import { Button, Chip, HealthBadge, Notice, PageHeader, Select, StatusBadge, TextInput, WeatherBadge } from '../components/ui'
-import { downloadCsv, isFramed, money, num, relDays } from '../lib/format'
+import { GRAIN_SEGMENTS, OPERATION_LABEL, OPERATION_OPTIONS, type Account, type Segment, type Species } from '../types'
+import { Button, Chip, Notice, PageHeader, Select, StatusBadge, TextInput } from '../components/ui'
+import { downloadCsv, isFramed, money, num, relDays, sizeLabel } from '../lib/format'
 import { mrr } from '../lib/pricing'
 
-const SEGMENTS: Segment[] = ['Sow Farm', 'Wean-to-Finish', 'Farrow-to-Finish', 'Contract Finisher', 'Integrated System', 'Cow-Calf', 'Stocker / Backgrounder', 'Feedlot', 'Dairy']
-type SortKey = 'name' | 'head' | 'arr' | 'health' | 'weather' | 'signal'
+const SEGMENTS: Record<Species, readonly Segment[]> = {
+  Hog: ['Sow Farm', 'Wean-to-Finish', 'Farrow-to-Finish', 'Contract Finisher', 'Integrated System'],
+  Cattle: ['Cow-Calf', 'Stocker / Backgrounder', 'Feedlot', 'Dairy'],
+  Grain: GRAIN_SEGMENTS,
+}
+type SortKey = 'name' | 'size' | 'arr' | 'signal'
+/** Size in the operation's own unit: head for livestock, acres for field crops. */
+const sizeOf = (a: Account) => (a.species === 'Grain' ? a.acres : a.headCount)
 
 const td = 'px-4 py-3 align-top first:pl-5 last:pr-5'
 const none = <span className="text-muted">—</span>
@@ -19,7 +25,7 @@ export default function Accounts() {
   const book = useBook()
   const [params] = useSearchParams()
   const [q, setQ] = useState('')
-  const [species, setSpecies] = useState('All')
+  const [species, setSpecies] = useState<'All' | Species>('All')
   const [segment, setSegment] = useState('All')
   const [status, setStatus] = useState(params.get('status') ?? 'All')
   const [state, setState] = useState(params.get('state') ?? 'All')
@@ -43,10 +49,8 @@ export default function Accounts() {
     const v = (a: Account): number | string => {
       switch (sort.k) {
         case 'name': return a.name
-        case 'head': return a.headCount
+        case 'size': return sizeOf(a)
         case 'arr': return mrr(a)
-        case 'health': return book.health[a.id]?.score ?? -1
-        case 'weather': return book.weatherRisk[a.id]?.risk ?? 0
         case 'signal': return signalsByAccount[a.id]?.[0]?.date ?? ''
       }
     }
@@ -66,7 +70,7 @@ export default function Accounts() {
   }
 
   const exportCsv = async () => {
-    const result = await downloadCsv('accounts.csv', [['ID', 'Name', 'Species', 'Segment', 'County', 'State', 'Head', 'Sites', 'Barns', 'Status', 'ARR', 'Rep', 'Integrator/Packer', 'Parent'], ...rows.map((a) => [a.id, a.name, a.species, a.segment, a.county, a.state, a.headCount, a.sites, a.barns, a.status, Math.round(mrr(a) * 12), a.rep, a.integrator ?? '', a.parentCompany ?? ''])])
+    const result = await downloadCsv('accounts.csv', [['ID', 'Name', 'Operation', 'Segment', 'Crops', 'County', 'State', 'Head', 'Acres', 'Sites', 'Barns or bins', 'Status', 'ARR', 'Rep', 'Integrator, packer or elevator', 'Parent'], ...rows.map((a) => [a.id, a.name, OPERATION_LABEL[a.species], a.segment, (a.crops ?? []).join('; '), a.county, a.state, a.headCount, a.acres, a.sites, a.barns, a.status, Math.round(mrr(a) * 12), a.rep, a.integrator ?? '', a.parentCompany ?? ''])])
     if (result === 'copied') toast('Copied to clipboard')
     else if (result === 'failed') toast("Couldn't copy. Allow clipboard access in your browser and try again.", true)
   }
@@ -91,7 +95,7 @@ export default function Accounts() {
     <div>
       <PageHeader
         title="Accounts"
-        subtitle="Every hog and cattle operation we sell to or want to sell to."
+        subtitle="Every hog, cattle and field-crop operation we sell to or want to sell to."
         actions={
           <Button onClick={exportCsv}>
             {framed ? <Copy size={14} /> : <Download size={14} />} {framed ? 'Copy as CSV' : 'Export CSV'}
@@ -110,8 +114,8 @@ export default function Accounts() {
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
         <TextInput className="col-span-2 md:col-span-1 xl:col-span-2" label="Search" value={q} onChange={(v) => { setQ(v); reset() }} placeholder="Name, contact or integrator" />
-        <Select label="Species" value={species} onChange={(v) => { setSpecies(v); reset() }} options={['All', 'Hog', 'Cattle']} />
-        <Select label="Segment" value={segment} onChange={(v) => { setSegment(v); reset() }} options={['All', ...SEGMENTS]} />
+        <Select label="Operation" value={species} onChange={(v) => { setSpecies(v); setSegment('All'); reset() }} options={OPERATION_OPTIONS} />
+        <Select label="Segment" value={segment} onChange={(v) => { setSegment(v); reset() }} options={['All', ...(species === 'All' ? Object.values(SEGMENTS).flat() : SEGMENTS[species])]} />
         <Select label="Status" value={status} onChange={(v) => { setStatus(v); reset() }} options={['All', 'Customer', 'Prospect', 'Churned']} />
         <Select label="State" value={state} onChange={(v) => { setState(v); reset() }} options={[{ value: 'All', label: 'All' }, ...STATE_LIST.map((s) => ({ value: s.code, label: s.name }))]} />
         <Select label="Rep" value={rep} onChange={(v) => { setRep(v); reset() }} options={['All', ...TEAM]} />
@@ -136,17 +140,15 @@ export default function Accounts() {
       </div>
 
       <div className="mt-4 overflow-x-auto rounded-[var(--radius-card)] border border-line bg-surface">
-        <table className="w-full min-w-[1150px] text-[14px]">
+        <table className="w-full min-w-[1000px] text-[14px]">
           <thead>
             <tr>
               {th('Account', 'name')}
               {th('Segment')}
-              {th('Head', 'head', true)}
-              {th('Sites / barns', undefined, true)}
+              {th('Size', 'size', true)}
+              {th('Sites / barns or bins', undefined, true)}
               {th('Status')}
               {th('ARR', 'arr', true)}
-              {th('Health', 'health')}
-              {th('Weather (7d)', 'weather')}
               {th('Pricing')}
               {th('Latest signal', 'signal')}
               {th('Rep')}
@@ -167,14 +169,12 @@ export default function Accounts() {
                   </td>
                   <td className={`${td} whitespace-nowrap`}>
                     <span className="text-ink">{a.segment}</span>
-                    <div className="mt-0.5 text-[12px] text-muted">{a.species}</div>
+                    <div className="mt-0.5 text-[12px] text-muted">{a.species === 'Grain' ? (a.crops ?? []).join(', ') : OPERATION_LABEL[a.species]}</div>
                   </td>
-                  <td className={`${td} tabular text-right text-ink`}>{num(a.headCount)}</td>
+                  <td className={`${td} tabular whitespace-nowrap text-right text-ink`}>{sizeLabel(a)}</td>
                   <td className={`${td} tabular text-right text-ink`}>{a.sites} / {a.barns}</td>
                   <td className={td}><Chip tone={a.status === 'Customer' ? 'accent' : a.status === 'Churned' ? 'dim' : 'neutral'}>{a.status}</Chip></td>
                   <td className={`${td} tabular text-right text-ink`}>{a.status === 'Customer' ? money(mrr(a) * 12) : none}</td>
-                  <td className={td}><HealthBadge h={book.health[a.id]} /></td>
-                  <td className={td}>{a.status === 'Customer' ? <WeatherBadge w={book.weatherRisk[a.id]} compact /> : none}</td>
                   <td className={td}>
                     {p ? <StatusBadge tone={p.status === 'Under-priced' ? 'warning' : p.status === 'Over-priced' ? 'serious' : 'good'}>{p.status}</StatusBadge> : none}
                   </td>

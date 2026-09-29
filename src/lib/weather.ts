@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Account, Segment } from '../types'
+import type { Account, Segment, Species } from '../types'
 import { STATES } from '../data/geo'
 import type { WeatherKind } from './outreach'
 
@@ -34,7 +34,7 @@ export interface WeatherRisk {
 
 const dow = (iso: string) => new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
 
-export function assessWeather(days: DayForecast[] | undefined, segment: Segment, species: 'Hog' | 'Cattle'): WeatherRisk {
+export function assessWeather(days: DayForecast[] | undefined, segment: Segment, species: Species): WeatherRisk {
   if (!days?.length) return { risk: 0, label: 'No forecast', detail: '' }
   const outdoor = ['Cow-Calf', 'Stocker / Backgrounder', 'Feedlot'].includes(segment)
   let best: WeatherRisk = { risk: 5, label: 'Normal', detail: 'No weather stress expected in the next 7 days.' }

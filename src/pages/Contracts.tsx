@@ -24,12 +24,12 @@ export default function Contracts() {
 
   return (
     <div>
-      <PageHeader title="Contracts" subtitle="Terms, redlines and renewals for every account." />
+      <PageHeader title="Lucas the Hog" subtitle="Contracts, redlines and renewals for every account, with a deal-desk agent that reviews customer redlines." />
 
       <div className="mb-5 flex items-start gap-4 rounded-[var(--radius-card)] border border-line bg-surface px-5 py-4">
         <LucasMark size={44} />
         <div className="min-w-0 max-w-[68ch]">
-          <div className="text-[15px] font-medium text-ink">Lucas the Hog</div>
+          <div className="text-[15px] font-medium text-ink">How Lucas reviews redlines</div>
           <p className="mt-0.5 text-[14px] leading-relaxed text-ink-2">
             Checks each customer redline against our negotiation playbook, recommends accept, counter or reject with language you can paste, and drafts the reply that moves the deal to signature.
           </p>
