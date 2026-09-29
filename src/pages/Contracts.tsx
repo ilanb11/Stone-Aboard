@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { FileSignature } from 'lucide-react'
 import { useBook } from '../lib/useData'
@@ -7,6 +7,8 @@ import { Card, Chip, LucasMark, PageHeader, StatusBadge, Tabs } from '../compone
 import { money, shortDate } from '../lib/format'
 import { mrr } from '../lib/pricing'
 import { annualValue } from '../lib/lucasDrafts'
+import { Pager } from '../components/Pager'
+import DealMail from './contracts/DealMail'
 
 const th = 'whitespace-nowrap px-4 py-3 text-[13px] font-normal text-muted'
 const statusTone = (s: string): 'dim' | 'neutral' | 'lime' => (s === 'Expired' ? 'dim' : s === 'Draft' ? 'lime' : 'neutral')
@@ -15,9 +17,25 @@ export default function Contracts() {
   const book = useBook()
   const reviews = useCrm((s) => s.reviews)
   const outreach = useCrm((s) => s.outreach)
-  const [params] = useSearchParams()
+  const mailWaiting = useCrm((s) => s.mailProposals.filter((p) => p.status === 'Proposed' && !p.auto).length)
+  const [params, setParams] = useSearchParams()
   const drafts = book.contracts.filter((c) => c.status === 'Draft').length
-  const [tab, setTab] = useState<'drafts' | 'neg' | 'renewing' | 'all'>(params.get('tab') === 'drafts' || drafts ? 'drafts' : 'neg')
+  type Tab = 'drafts' | 'neg' | 'renewing' | 'all' | 'mail'
+  const [tab, setTabState] = useState<Tab>(params.get('tab') === 'mail' ? 'mail' : params.get('tab') === 'drafts' || drafts ? 'drafts' : 'neg')
+  // Links into the mail tab (dashboard, contract pages) can land here while the page is already open.
+  const urlTab = params.get('tab')
+  useEffect(() => {
+    if (urlTab === 'mail') setTabState('mail')
+  }, [urlTab])
+  const setTab = (v: Tab) => {
+    setTabState(v)
+    // The mail tab keeps its place in the URL (the dashboard and contract pages link to it).
+    const next = new URLSearchParams(params)
+    if (v === 'mail') next.set('tab', 'mail')
+    else next.delete('tab'), next.delete('msg')
+    setParams(next, { replace: true })
+  }
+  const [page, setPage] = useState(0)
   const rows = useMemo(() => {
     const soon = Date.now() + 120 * 86400000
     return book.contracts
@@ -37,7 +55,7 @@ export default function Contracts() {
         <div className="min-w-0 max-w-[68ch]">
           <div className="text-[15px] font-medium text-ink">What Lucas does</div>
           <p className="mt-0.5 text-[14px] leading-relaxed text-ink-2">
-            When a deal first moves to Negotiation, Lucas drafts the contract from CRM and Pricing data and writes the email that introduces it. Both wait here for your review; nothing is sent until you approve it. When the customer sends redlines back, Lucas checks each one against our negotiation playbook and recommends accept, counter or reject.
+            When a deal first moves to Negotiation, Lucas drafts the contract from CRM and Pricing data and writes the email that introduces it. Both wait here for your review; nothing is sent until you approve it. With the reps' mailboxes connected, Lucas also reads the negotiation email: redlines, agreed terms and signed copies land on the contract for you to confirm. When the customer sends redlines back, Lucas checks each one against our negotiation playbook and recommends accept, counter or reject.
           </p>
           <p className="mt-2 text-[14px] text-ink">
             {drafts === 1 ? '1 draft is' : `${drafts} drafts are`} waiting for review, and {neg === 1 ? '1 contract is' : `${neg} contracts are`} in negotiation.
@@ -45,11 +63,11 @@ export default function Contracts() {
         </div>
       </div>
 
-      <Card pad={false}>
-        <div className="px-5 pt-5">
+      <Card pad={false} className={tab === 'mail' ? 'mb-4' : ''}>
+        <div className={tab === 'mail' ? 'px-5 py-4' : 'px-5 pt-5'}>
           <Tabs
             value={tab}
-            onChange={setTab}
+            onChange={(v) => { setTab(v); setPage(0) }}
             tabs={[
               {
                 value: 'drafts',
@@ -69,9 +87,18 @@ export default function Contracts() {
               },
               { value: 'renewing', label: 'Renewing in 120 days' },
               { value: 'all', label: 'All contracts' },
+              {
+                value: 'mail',
+                label: (
+                  <>
+                    Deal mail{mailWaiting ? <span className="tabular ml-1.5 opacity-60">{mailWaiting}</span> : null}
+                  </>
+                ),
+              },
             ]}
           />
         </div>
+        {tab !== 'mail' && (
         <div className="relative overflow-x-auto">
           <table className="w-full min-w-[900px] text-[14px]">
             <thead>
@@ -89,7 +116,7 @@ export default function Contracts() {
               </tr>
             </thead>
             <tbody>
-              {rows.slice(0, 200).map((c) => {
+              {rows.slice(page * 15, page * 15 + 15).map((c) => {
                 const a = book.byId[c.accountId]
                 const opp = book.opportunities.find((o) => o.contractId === c.id)
                 const r = reviews[c.id]
@@ -163,13 +190,16 @@ export default function Contracts() {
               })}
             </tbody>
           </table>
+          <Pager page={page} pages={Math.ceil(rows.length / 15)} onPage={setPage} total={rows.length} size={15} noun="contracts" />
           {!rows.length && (
             <div className="border-t border-line px-5 py-10 text-center text-[14px] text-muted">
               {tab === 'drafts' ? 'No drafts waiting. Move a deal to Negotiation on the Accounts page or the pipeline board and Lucas drafts its contract here.' : 'No contracts in this view.'}
             </div>
           )}
         </div>
+        )}
       </Card>
+      {tab === 'mail' && <DealMail />}
     </div>
   )
 }

@@ -26,6 +26,7 @@ const BASE_SEED = 4172026
 const SPREAD_SEED = 20260930
 const GRAIN_SEED = 7310511
 const PIPELINE_SEED = 1162027
+const NOTES_SEED = 5240613
 let rng = mulberry32(BASE_SEED)
 const rand = (lo = 0, hi = 1) => lo + rng() * (hi - lo)
 const randInt = (lo: number, hi: number) => Math.floor(rand(lo, hi + 1))
@@ -284,7 +285,7 @@ function accountSignal(a: Account, type: SignalType, date: string): Signal {
       const role = pick(['GM', 'CFO', 'Operations'] as const)
       const title = role === 'GM' ? 'General Manager' : role === 'CFO' ? 'Chief Financial Officer' : hog ? 'Director of Production' : 'Operations Manager'
       const person = `${pick(FIRST)} ${pick(SURNAMES)}`
-      a.contacts.push({ id: `C${Math.floor(rng() * 1e9).toString(36)}`, name: person, title, role, email: `${person.replace(' ', '.').toLowerCase()}@${slug(a.name)}.example`, since: date })
+      a.contacts.push({ id: `C${Math.floor(rng() * 1e9).toString(36)}`, name: person, title, role, email: `${person.replace(/\s+/g, '.').toLowerCase()}@${slug(a.name)}.example`, since: date })
       return sig(`${person} named ${title} at ${a.name}`, `${person} joins ${a.name} (${where}) as ${title}, replacing a long-time leader. New leaders often re-evaluate vendors within 6 months.`, role === 'CFO' ? 'Medium' : 'High')
     }
     case 'Ownership Change': {
@@ -455,7 +456,7 @@ function grainSignal(a: Account, type: SignalType, date: string): Signal {
       const role = pick(['GM', 'CFO', 'Operations'] as const)
       const title = role === 'GM' ? 'General Manager' : role === 'CFO' ? 'Chief Financial Officer' : 'Farm Manager'
       const person = `${pick(FIRST)} ${pick(SURNAMES)}`
-      a.contacts.push({ id: `C${Math.floor(rng() * 1e9).toString(36)}`, name: person, title, role, email: `${person.replace(' ', '.').toLowerCase()}@${slug(a.name)}.example`, since: date })
+      a.contacts.push({ id: `C${Math.floor(rng() * 1e9).toString(36)}`, name: person, title, role, email: `${person.replace(/\s+/g, '.').toLowerCase()}@${slug(a.name)}.example`, since: date })
       return sig(`${person} named ${title} at ${a.name}`, `${person} takes over day-to-day decisions at ${a.name} (${where}). A good moment to revisit how field records and bin data are handled.`, role === 'CFO' ? 'Medium' : 'High')
     }
     case 'Ownership Change': {
@@ -519,7 +520,7 @@ export interface Dataset {
   activities: Activity[]
 }
 
-export const SEED_VERSION = 16
+export const SEED_VERSION = 18
 
 const LOST_REASONS = ['Lost to a competitor on price', 'Stayed with spreadsheets', 'No budget this year', "Chose their integrator's system", 'Decision maker left before signing']
 const ON_ICE_REASONS = ['Budget frozen until after harvest', 'Waiting on integrator approval', 'Paused after a herd health break', 'Revisit after the lender review', 'Champion left the company', 'Revisit next budget cycle']
@@ -728,6 +729,79 @@ export function generateDataset(n = 900, grainCount = 240): Dataset {
     worked.add(a.id)
     a.lastContact = chance(0.8) ? iso(-randInt(1, 21)) : iso(-randInt(32, 80))
     if (noteById[`V-${a.id}`]) noteById[`V-${a.id}`].date = a.lastContact
+  }
+
+  // Pass 5: the rep's notes on lost and on-ice deals, on their own stream. Reconnects read
+  // these: each note says why the deal stalled and when (or on what) to come back.
+  rng = mulberry32(NOTES_SEED)
+  const monthName = (iso: string, addMonths: number) => {
+    const d = new Date(iso)
+    d.setMonth(d.getMonth() + addMonths)
+    return d.toLocaleDateString('en-US', { month: 'long' })
+  }
+  // Notes follow the operation: no PRRS on a cattle ranch, no barns or HerdTrack on a wheat farm.
+  const NOTE: Record<string, (a: Account, at: string) => string> = {
+    'Lost to a competitor on price': (a, at) => `Lost to ${a.competitor ?? 'a competitor'} on price. They signed a 12-month term; the owner said to call in ${monthName(at, 10)}, before it renews, and he'd look at us again.`,
+    'Stayed with spreadsheets': (a) =>
+      a.species === 'Grain'
+        ? 'Went back to spreadsheets for now. The owner liked the yield maps; revisit when they expand acres or bring on a new farm manager.'
+        : a.species === 'Cattle'
+          ? 'Went back to spreadsheets for now. The GM liked the herd inventory reports; revisit when they expand the herd or hire a production manager.'
+          : 'Went back to spreadsheets for now. The GM liked the closeout reports; revisit when they add the next barn or hire a production manager.',
+    'No budget this year': () => 'No budget this year. The CFO said to come back with a proposal in January for next year’s budget.',
+    "Chose their integrator's system": (a) =>
+      a.species === 'Cattle' ? 'Chose the packer’s system. Their packer agreement comes up in the spring; ask again if they switch packers.' : 'Chose the integrator’s system. Their integrator contract comes up in the spring; ask again if they switch integrators.',
+    'Decision maker left before signing': () => 'The owner’s son was driving the deal and left the operation before signing. Wait for the new manager, then reintroduce.',
+    'Went with the equipment dealer bundle': () => 'Took the equipment dealer’s software bundle. It’s weak on agronomy; check in after harvest when they review yields.',
+    'Budget frozen until after harvest': (a) => `Budget frozen until after harvest. Call back in early November; the owner was keen on ${a.species === 'Grain' ? 'grain bin' : 'feed bin'} monitoring.`,
+    'Waiting on integrator approval': (a) =>
+      a.species === 'Cattle' ? 'Waiting on the packer to approve sharing herd data with a third party. Follow up in 60 days.' : 'Waiting on the integrator to approve third-party sensors. Follow up in 60 days.',
+    'Paused after a herd health break': (a) => `Paused after ${a.species === 'Cattle' ? 'a BRD outbreak' : 'a PRRS break'}. Give them 90 days to get the herd stable, then check in.`,
+    'Revisit after the lender review': (a) =>
+      a.species === 'Grain'
+        ? 'Revisit after the lender review this fall. Their banker wants field-level yield and input records, which FieldTrack would give them.'
+        : 'Revisit after the lender review this fall. Their banker wants production records, which HerdTrack would give them.',
+    'Champion left the company': (a) => `Our champion, the ${a.species === 'Grain' ? 'farm manager' : 'production manager'}, left. Find the replacement and restart the conversation.`,
+    'Revisit next budget cycle': () => 'Asked us to revisit in the next budget cycle, in January.',
+    'Waiting on the new farm manager': () => 'A new farm manager starts next month; reintroduce FieldTrack once they’re settled.',
+  }
+  const LATER = (a: Account) => [
+    'Ran into the owner at the county fair. Asked how pricing would look for next year.',
+    a.species === 'Grain'
+      ? 'Owner called about sensors for the new grain bins. Said to send something over.'
+      : a.species === 'Hog' || a.segment === 'Dairy'
+        ? 'Owner called about sensor options for the new barn. Said to send something over.'
+        : 'Owner called about stock-water monitoring for the new pasture ground. Said to send something over.',
+    `Saw them at the ${a.species === 'Hog' ? 'state pork expo' : a.species === 'Cattle' ? 'state cattlemen’s convention' : 'state farm show'}; they’re still frustrated with their current system.`,
+    'CFO emailed asking for a reference customer in their area.',
+  ]
+  const DAY_MS = 86400000
+  // Only a real vendor has a contract that renews.
+  const vendor = (a: Account) => !!a.competitor && !/spreadsheet|paper|none/i.test(a.competitor)
+  const termFrom = new Map<string, string>()
+  for (const o of opportunities) {
+    if (o.stage !== 'Closed Lost' && o.stage !== 'On Ice') continue
+    const a = accountById[o.accountId]
+    // Pass 1 seeds some lost new-logo deals without a reason; give them one so there's a note to go on.
+    if (!o.reason) o.reason = pick(o.stage === 'On Ice' ? ON_ICE_REASONS : LOST_REASONS)
+    if (o.reason === 'Lost to a competitor on price' && !vendor(a)) o.reason = 'Stayed with spreadsheets'
+    const at = o.stageChangedAt ?? o.closeDate
+    const text = NOTE[o.reason]?.(a, at)
+    if (!text) continue
+    // The competitor contract renews at the end of the 12-month term the note mentions (the latest loss wins).
+    if (o.reason === 'Lost to a competitor on price' && at > (termFrom.get(a.id) ?? '')) {
+      termFrom.set(a.id, at)
+      const renews = new Date(at)
+      renews.setMonth(renews.getMonth() + 12)
+      a.competitorRenewal = renews.toISOString()
+    }
+    activities.push({ id: `V-R-${o.id}`, accountId: a.id, date: at, author: a.rep, kind: chance(0.6) ? 'Note' : 'Call', text })
+    // Some accounts warmed up again since.
+    const age = (TODAY.getTime() - new Date(at).getTime()) / DAY_MS
+    if (age > 40 && chance(0.3)) {
+      const later = new Date(new Date(at).getTime() + rand(20, Math.max(21, age - 5)) * DAY_MS).toISOString()
+      activities.push({ id: `V-R2-${o.id}`, accountId: a.id, date: later, author: a.rep, kind: 'Note', text: pick(LATER(a)) })
+    }
   }
 
   // Geography tags on every signal: region from the state; county for account signals

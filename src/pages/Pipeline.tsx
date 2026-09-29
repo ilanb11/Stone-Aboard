@@ -2,8 +2,9 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { ArrowDown, ArrowUp, ArrowUpDown, FileSignature, Landmark } from 'lucide-react'
 import { lawChanges, useBook } from '../lib/useData'
-import { awardText, deadlineText, grantMatchesForAccount, type AccountGrantMatch } from '../lib/grants'
+import { COVERAGE_THRESHOLD, deadlineText, grantMatchesForAccount, purchaseFromDeal, type AccountGrantMatch } from '../lib/grants'
 import { grantApplicationId } from '../lib/grantDrafts'
+import { Reconnects } from './pipeline/Reconnects'
 import { useCrm } from '../store'
 import { TEAM } from '../data/generate'
 import { REGIONS } from '../data/geo'
@@ -31,6 +32,7 @@ const CLOSE_OPTIONS = [
   { value: '90', label: 'Next 90 days' },
   { value: 'later', label: 'More than 90 days out' },
   { value: 'closed90', label: 'Closed in the last 90 days' },
+  { value: 'month', label: 'Closed this month' },
 ]
 const STALE_OPTIONS = [
   { value: '14', label: '14 days' },
@@ -51,11 +53,11 @@ export interface Deal {
   idleDays: number
   stale: boolean
   overdueDays: number
-  /** Grant programs the account qualifies for through a regional rule change (same as Signals). */
+  /** Grant programs paying at least COVERAGE_THRESHOLD / 2 of this open deal's annual cost (drafts need the full threshold). */
   grants: AccountGrantMatch[]
 }
 
-/** The same grant programs Signals attaches to rule changes, for one deal's account. */
+/** Grant programs that can pay for part of one open deal, with any rule change behind them. */
 function DealGrants({ d, apps }: { d: Deal; apps: Set<string> }) {
   if (!d.grants.length) return null
   return (
@@ -69,9 +71,10 @@ function DealGrants({ d, apps }: { d: Deal; apps: Set<string> }) {
           const id = grantApplicationId(m.grant.id, d.a.id)
           return (
             <li key={m.grant.id} className="text-ink-2">
-              <span className="text-ink">{m.grant.shortName}</span> · {awardText(m.grant)}
+              <span className="text-ink">{m.grant.shortName}</span> · covers {Math.round(m.coverage.coverage * 100)}% of this deal ({money(m.coverage.funded)})
               <span className="block text-muted">
-                {dl.date ? `Deadline ${dl.date}` : dl.label} · {m.changes[0].label}
+                {dl.date ? `Deadline ${dl.date}` : dl.label}
+                {m.changes[0] ? ` · ${m.changes[0].label}` : ''}
                 {apps.has(id) && (
                   <>
                     {' · '}
@@ -107,6 +110,11 @@ function inClose(d: Deal, close: string, now: number) {
     case '90': return d.open && t >= now && t <= now + 90 * DAY
     case 'later': return d.open && t > now + 90 * DAY
     case 'closed90': return isClosedStage(d.o.stage) && t >= now - 90 * DAY && t <= now
+    case 'month': {
+      const n = new Date(now)
+      const at = new Date(d.o.stage === 'Closed Won' || d.o.stage === 'Closed Lost' ? d.o.stageChangedAt ?? d.o.closeDate : d.o.closeDate)
+      return isClosedStage(d.o.stage) && at.getFullYear() === n.getFullYear() && at.getMonth() === n.getMonth()
+    }
     default: return true
   }
 }
@@ -142,14 +150,15 @@ export default function Pipeline() {
   const [page, setPage] = useState(0)
 
   const get = (k: string, d: string) => params.get(k) ?? d
-  const view = get('view', 'board') === 'table' ? 'table' : 'board'
+  const v0 = get('view', 'board')
+  const view: 'board' | 'table' | 'reconnects' = v0 === 'table' || v0 === 'reconnects' ? v0 : 'board'
   const stage = get('stage', 'All') as 'All' | OppStage
   const rep = get('rep', 'All')
   const op = get('op', 'All')
   const region = get('region', 'All')
   const size = get('size', 'all')
   const close = get('close', 'all')
-  const flag = get('flag', 'all') as 'all' | 'stale' | 'overdue' | 'grants'
+  const flag = get('flag', 'all') as 'all' | 'attention' | 'stale' | 'overdue' | 'grants'
   const grantApps = useCrm((s) => s.grantApplications)
   const appIds = useMemo(() => new Set(grantApps.map((g) => g.id)), [grantApps])
   const staleAfter = Number(get('staleAfter', '30'))
@@ -179,11 +188,8 @@ export default function Pipeline() {
       const t = new Date(v.date).getTime()
       if (t > (lastAct[v.accountId] ?? 0)) lastAct[v.accountId] = t
     }
-    const grantCache = new Map<string, AccountGrantMatch[]>()
-    const grantsFor = (a: (typeof book.accounts)[number]) => {
-      if (!grantCache.has(a.id)) grantCache.set(a.id, grantMatchesForAccount(a, lawChanges))
-      return grantCache.get(a.id)!
-    }
+    // Grant programs that can pay for part of this deal (open deals only; that's the purchase).
+    const grantsFor = (a: (typeof book.accounts)[number], o: (typeof book.opportunities)[number]) => grantMatchesForAccount(a, lawChanges, purchaseFromDeal(a, o)).filter((m) => m.coverage.coverage >= COVERAGE_THRESHOLD / 2)
     return book.opportunities.map((o) => {
       const a = book.byId[o.accountId]
       const open = isOpenStage(o.stage)
@@ -191,7 +197,7 @@ export default function Pipeline() {
       const lastTouch = Math.max(new Date(o.stageChangedAt ?? o.createdAt).getTime(), new Date(a.lastContact).getTime(), lastAct[a.id] ?? 0)
       const idleDays = Math.max(0, Math.floor((now - lastTouch) / DAY))
       const closeT = new Date(o.closeDate).getTime()
-      return { o, a, open, p, weighted: open ? o.arr * (p ?? 0) : 0, lastTouch, idleDays, stale: open && idleDays > staleAfter, overdueDays: open && closeT < now ? Math.floor((now - closeT) / DAY) : 0, grants: o.stage === 'Closed Lost' ? [] : grantsFor(a) }
+      return { o, a, open, p, weighted: open ? o.arr * (p ?? 0) : 0, lastTouch, idleDays, stale: open && idleDays > staleAfter, overdueDays: open && closeT < now ? Math.floor((now - closeT) / DAY) : 0, grants: open ? grantsFor(a, o) : [] }
     })
   }, [book, activities, staleAfter, now])
 
@@ -204,6 +210,7 @@ export default function Pipeline() {
       if (region !== 'All' && d.a.region !== region) return false
       if (!inSize(d.o.arr, size)) return false
       if (!inClose(d, close, now)) return false
+      if (flag === 'attention' && !d.stale && !d.overdueDays) return false
       if (flag === 'stale' && !d.stale) return false
       if (flag === 'overdue' && !d.overdueDays) return false
       if (flag === 'grants' && !d.grants.length) return false
@@ -227,7 +234,7 @@ export default function Pipeline() {
     const week = now - 7 * DAY
     const added = base.filter((d) => new Date(d.o.createdAt).getTime() >= week).length
     const moved = base.filter((d) => d.o.stageChangedAt && new Date(d.o.stageChangedAt).getTime() >= week && new Date(d.o.stageChangedAt).getTime() > new Date(d.o.createdAt).getTime() + 1000).length
-    return { byStage, openValue, weighted, openCount: open.length, winRate: closed.length ? won / closed.length : 0, won, closed: closed.length, added, moved, stale: base.filter((d) => d.stale).length, overdue: base.filter((d) => d.overdueDays).length, grants: base.filter((d) => d.grants.length).length }
+    return { byStage, openValue, weighted, openCount: open.length, winRate: closed.length ? won / closed.length : 0, won, closed: closed.length, added, moved, attention: base.filter((d) => d.stale || d.overdueDays).length, stale: base.filter((d) => d.stale).length, overdue: base.filter((d) => d.overdueDays).length, grants: base.filter((d) => d.grants.length).length }
   }, [base, now])
 
   const sorted = useMemo(() => {
@@ -270,7 +277,9 @@ export default function Pipeline() {
 
   const PAGE = 50
   const pages = Math.max(1, Math.ceil(sorted.length / PAGE))
-  const pageRows = sorted.slice(page * PAGE, page * PAGE + PAGE)
+  // Moving a deal out of a stage-filtered table can shrink it below the current page.
+  const cur = Math.min(page, pages - 1)
+  const pageRows = sorted.slice(cur * PAGE, cur * PAGE + PAGE)
   const visibleStages = stage === 'All' ? OPP_STAGES : [stage]
   const td = 'px-2.5 py-3 align-top first:pl-5 last:pr-5'
 
@@ -310,6 +319,7 @@ export default function Pipeline() {
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2 text-[13px] text-ink-2">
           <span>Flags:</span>
+          <Pill active={flag === 'attention'} onClick={() => update({ flag: flag === 'attention' ? null : 'attention' })}>Needs attention {summary.attention}</Pill>
           <Pill active={flag === 'stale'} onClick={() => update({ flag: flag === 'stale' ? null : 'stale' })}>Stale {summary.stale}</Pill>
           <Pill active={flag === 'overdue'} onClick={() => update({ flag: flag === 'overdue' ? null : 'overdue' })}>Past due {summary.overdue}</Pill>
           <Pill active={flag === 'grants'} onClick={() => update({ flag: flag === 'grants' ? null : 'grants' })}>Grant funding {summary.grants}</Pill>
@@ -323,14 +333,18 @@ export default function Pipeline() {
               {STALE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </label>
-          <span className="basis-full text-muted sm:basis-auto">Stale: an open deal with no stage change or contact in more than {staleAfter} days. Past due: an open deal beyond its expected close date. Grant funding: the account qualifies for a program through a regional rule change.</span>
+          <span className="basis-full text-muted sm:basis-auto">Stale: an open deal with no stage change or contact in more than {staleAfter} days. Past due: an open deal beyond its expected close date. Needs attention: stale, past due or both. Grant funding: a program would pay at least {Math.round((COVERAGE_THRESHOLD / 2) * 100)}% of this open deal's annual cost (drafts are prepared at {Math.round(COVERAGE_THRESHOLD * 100)}%).</span>
         </div>
       </section>
 
       {/* Filters */}
       <div className="mt-5 flex flex-wrap items-end justify-between gap-3">
-        <Tabs value={view} onChange={(v) => update({ view: v === 'board' ? null : v })} tabs={[{ value: 'board', label: 'Board' }, { value: 'table', label: 'Table' }]} />
+        <Tabs value={view} onChange={(v) => update({ view: v === 'board' ? null : v })} tabs={[{ value: 'board', label: 'Board' }, { value: 'table', label: 'Table' }, { value: 'reconnects', label: 'Reconnects' }]} />
       </div>
+      {view === 'reconnects' ? (
+        <Reconnects />
+      ) : (
+      <>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 min-[1680px]:grid-cols-8">
         <TextInput className="col-span-2" label="Search" value={q} onChange={(v) => update({ q: v })} placeholder="Account, place or deal type" />
         <Select label="Sales rep" value={rep} onChange={(v) => update({ rep: v })} options={['All', ...TEAM]} />
@@ -429,13 +443,13 @@ export default function Pipeline() {
                       <div className="meta mt-2 text-muted">
                         {isClosedStage(d.o.stage) ? 'Closed' : d.o.stage === 'On Ice' ? 'Revisit' : 'Closes'} {shortDate(d.o.closeDate)}
                       </div>
-                      {d.o.reason && <div className="mt-1.5 text-[12px] text-ink-2">{d.o.reason}</div>}
+                      {d.o.reason && !isOpenStage(d.o.stage) && <div className="mt-1.5 text-[12px] text-ink-2">{d.o.reason}</div>}
                       {d.grants.length > 0 && (
-                        <Link to={`/signals?tab=grants&account=${d.a.id}`} className="mt-2 flex items-center gap-1.5 text-[12px] text-ink underline-offset-4 hover:underline" title={d.grants.map((m) => `${m.grant.shortName}: ${awardText(m.grant)}`).join(', ')}>
+                        <Link to={`/signals?tab=grants&account=${d.a.id}`} className="mt-2 flex items-center gap-1.5 text-[12px] text-ink underline-offset-4 hover:underline" title={d.grants.map((m) => `${m.grant.shortName}: covers ${Math.round(m.coverage.coverage * 100)}% of this deal`).join(', ')}>
                           <Landmark size={12} aria-hidden />
                           <span className="truncate">
                             {d.grants[0].grant.shortName}
-                            {d.grants.length > 1 ? ` +${d.grants.length - 1}` : ''} · up to {money(d.grants[0].grant.award.max)}
+                            {d.grants.length > 1 ? ` +${d.grants.length - 1}` : ''} · covers {Math.round(d.grants[0].coverage.coverage * 100)}%
                           </span>
                         </Link>
                       )}
@@ -503,7 +517,7 @@ export default function Pipeline() {
                       >
                         {OPP_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
                       </select>
-                      {d.o.reason && <div className="mt-1 max-w-44 text-[12px] text-muted">{d.o.reason}</div>}
+                      {d.o.reason && !isOpenStage(d.o.stage) && <div className="mt-1 max-w-44 text-[12px] text-muted">{d.o.reason}</div>}
                     </td>
                     <td className={`${td} tabular text-right text-ink`}>{money(d.o.arr)}</td>
                     <td className={`${td} tabular text-right text-ink`}>{d.p !== undefined ? `${Math.round(d.p * 100)}%` : <span className="text-muted">—</span>}</td>
@@ -518,11 +532,13 @@ export default function Pipeline() {
             {!pageRows.length && <div className="border-t border-line px-5 py-10 text-center text-[14px] text-muted">No deals match these filters. Clear the filters to see the whole pipeline.</div>}
           </div>
           <div className="mt-3 flex items-center justify-end gap-2">
-            <Button size="sm" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</Button>
-            <span className="tabular px-1 text-[13px] text-ink-2">Page {page + 1} of {pages}</span>
-            <Button size="sm" disabled={page >= pages - 1} onClick={() => setPage(page + 1)}>Next</Button>
+            <Button size="sm" disabled={cur === 0} onClick={() => setPage(cur - 1)}>Previous</Button>
+            <span className="tabular px-1 text-[13px] text-ink-2">Page {cur + 1} of {pages}</span>
+            <Button size="sm" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>Next</Button>
           </div>
         </>
+      )}
+      </>
       )}
     </div>
   )

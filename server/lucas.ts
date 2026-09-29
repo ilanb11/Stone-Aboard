@@ -2,6 +2,7 @@ import type { Plugin } from 'vite'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import Anthropic from '@anthropic-ai/sdk'
 import { CLAUSES, TEMPLATE_VERSION } from '../src/data/contracts'
+import { MAIL_SCHEMA, MAIL_SYSTEM } from '../src/lib/mail/schema'
 
 // Lucas the Hog — contract review / negotiation agent, served from the Vite dev
 // server so the API key never reaches the browser. Credentials are resolved by
@@ -143,6 +144,15 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (url.startsWith('/api/lucas/review')) {
     const { data, model } = await structured(LUCAS_SYSTEM, `Review the customer redlines for this deal and return your analysis.\n\n<deal>\n${JSON.stringify(body, null, 2)}\n</deal>`, REVIEW_SCHEMA, 'high', 16000)
     return send(res, 200, { ...data, source: model })
+  }
+
+  // Email tracking: read one deal email against the CRM context. The client builds the user turn
+  // (it holds the CRM state) and verifies every quote in the answer; nothing here changes the CRM.
+  if (url.startsWith('/api/lucas/mail/extract')) {
+    const user = typeof body.user === 'string' ? body.user : ''
+    if (!user || user.length > 120_000) return send(res, 400, { error: 'Expected { user } with the email and CRM context.' })
+    const { data, model } = await structured(MAIL_SYSTEM, user, MAIL_SCHEMA, 'medium', 16000)
+    return send(res, 200, { data, model })
   }
 
   if (url.startsWith('/api/ai/outreach')) {

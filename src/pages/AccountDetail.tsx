@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, FileSignature, Mail, UserPlus } from 'lucide-react'
 import { useBook, signalsByAccount } from '../lib/useData'
@@ -8,8 +8,12 @@ import { Button, Card, Chip, Empty, Notice, PageHeader, StatusBadge, TextLink, i
 import { initials, money, num, relDays, shortDate } from '../lib/format'
 import { mrr } from '../lib/pricing'
 import { draftForSignal, whitespace } from '../lib/outreach'
-import { OPERATION_LABEL } from '../types'
-import { PriceAnalysisPanel, priceNoticeDraft } from './Pricing'
+import { OPERATION_LABEL, OPP_STAGES, isOpenStage, type AccountStatus, type OppStage } from '../types'
+import { currentDeal } from '../lib/pipeline'
+import { SignedContractButton } from '../components/SignedContractButton'
+import { Pager } from '../components/Pager'
+import type { PriceChangeDraft } from '../lib/priceChangeDrafts'
+import { NoticeAction, NoticeModal, PriceAnalysisPanel, lastNotices } from './Pricing'
 
 /** Label above value, like a spec sheet. */
 function Fact({ label, children, className = '' }: { label: string; children: ReactNode; className?: string }) {
@@ -30,10 +34,19 @@ export default function AccountDetail() {
   const outreach = useCrm((s) => s.outreach)
   const queueOutreach = useCrm((s) => s.queueOutreach)
   const log = useCrm((s) => s.log)
-  const proposePrice = useCrm((s) => s.proposePrice)
-  const proposals = useCrm((s) => s.priceProposals)
+  const invoices = useCrm((s) => s.invoices)
+  const setAccountStage = useCrm((s) => s.setAccountStage)
+  const setAccountStatus = useCrm((s) => s.setAccountStatus)
+  const moveOpp = useCrm((s) => s.moveOpp)
+  const [actPage, setActPage] = useState(0)
   const [note, setNote] = useState('')
   const [flash, setFlash] = useState<string | null>(null)
+  const [notice, setNotice] = useState<PriceChangeDraft | null>(null)
+  // The route reuses this component when only the id changes (header search), so start the next account fresh.
+  useEffect(() => {
+    setActPage(0)
+    setNote('')
+  }, [id])
   const a = id ? book.byId[id] : undefined
   if (!a)
     return (
@@ -50,6 +63,8 @@ export default function AccountDetail() {
   const negotiation = book.contracts.find((c) => c.accountId === a.id && c.status === 'In Negotiation') ?? book.contracts.find((c) => c.accountId === a.id && c.status === 'Draft')
   const opps = book.opportunities.filter((o) => o.accountId === a.id)
   const acts = activities.filter((x) => x.accountId === a.id).sort((x, y) => y.date.localeCompare(x.date))
+  const actPages = Math.max(1, Math.ceil(acts.length / 8))
+  const actCur = Math.min(actPage, actPages - 1)
   const mails = outreach.filter((o) => o.accountId === a.id)
   const pa = book.pricing[a.id]
   const ws = whitespace(a)
@@ -91,17 +106,46 @@ export default function AccountDetail() {
           </span>
         }
         actions={
-          negotiation && (
-            // A link styled as the primary pill: a <button> inside an <a> is invalid and adds a second tab stop.
-            <Link
-              to={`/contracts/${negotiation.id}`}
-              className="inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-accent px-4 text-[14px] font-medium text-on-accent transition hover:opacity-85"
-            >
-              <FileSignature size={14} aria-hidden /> Open in Lucas the Hog
-            </Link>
-          )
+          <>
+            <SignedContractButton account={a} />
+            {negotiation && (
+              // A link styled as the primary pill: a <button> inside an <a> is invalid and adds a second tab stop.
+              <Link
+                to={`/contracts/${negotiation.id}`}
+                className="inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-accent px-4 text-[14px] font-medium text-on-accent transition hover:opacity-85"
+              >
+                <FileSignature size={14} aria-hidden /> Open in Lucas the Hog
+              </Link>
+            )}
+          </>
         }
       />
+      {/* Status controls on the account itself (the same actions as the Accounts table). */}
+      <div className="mb-5 flex flex-wrap items-end gap-x-6 gap-y-3 rounded-[var(--radius-card)] border border-line bg-surface px-5 py-3">
+        <label className="flex flex-col gap-1.5 text-[13px] text-ink-2">
+          <span>Deal stage{currentDeal(opps) ? ` (${currentDeal(opps)!.type})` : ''}</span>
+          <select
+            id={`account-stage-${a.id}`}
+            value={currentDeal(opps)?.stage ?? ''}
+            onChange={(e) => setAccountStage(a.id, e.target.value as OppStage)}
+            className={`${inputClass} pr-8`}
+          >
+            {!currentDeal(opps) && <option value="">No deal yet</option>}
+            {OPP_STAGES.map((st) => (
+              <option key={st} value={st}>{st}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1.5 text-[13px] text-ink-2">
+          <span>Customer status</span>
+          <select id={`account-status-${a.id}`} value={a.status} onChange={(e) => setAccountStatus(a.id, e.target.value as AccountStatus)} className={`${inputClass} pr-8`}>
+            {(['Prospect', 'Customer', 'Churned'] as AccountStatus[]).map((st) => (
+              <option key={st} value={st}>{st}</option>
+            ))}
+          </select>
+        </label>
+        <p className="min-w-0 max-w-[60ch] pb-1.5 text-[12px] text-muted">Moving the deal to Negotiation has Lucas the Hog draft the contract and intro email once; Closed Won signs it. Changes are logged in Activity.</p>
+      </div>
       {flash && <Notice>{flash}</Notice>}
 
       <dl className="grid grid-cols-2 gap-x-6 gap-y-5 rounded-[var(--radius-card)] border border-line bg-surface p-5 sm:grid-cols-4 xl:grid-cols-7">
@@ -241,27 +285,13 @@ export default function AccountDetail() {
           {pa && (
             <Card title="Pricing normalization">
               <PriceAnalysisPanel a={a} pa={pa} contract={contract} />
-              {pa.status === 'Under-priced' && pa.ability && (
+              {/* The same notice flow as the band check (email plus revised invoice), so both show the same state. */}
+              {pa.status === 'Under-priced' && pa.ability?.canActNow && (
                 <div className="mt-4 flex flex-wrap items-center gap-2">
-                  {proposals[a.id] ? (
-                    <StatusBadge tone="good">
-                      Proposed +{proposals[a.id].pct.toFixed(1)}% on {shortDate(proposals[a.id].createdAt)}
-                    </StatusBadge>
-                  ) : (
-                    <Button
-                      variant="primary"
-                      onClick={() => {
-                        proposePrice(a.id, pa.recommendedPct, pa.ability!.effectiveDate)
-                        const d = priceNoticeDraft(a, pa)
-                        queueOutreach({ ...d, auto: false, status: 'Draft' })
-                        toast('Price notice drafted and added to the outreach queue for approval')
-                      }}
-                    >
-                      Propose +{pa.recommendedPct.toFixed(1)}% and draft notice
-                    </Button>
-                  )}
+                  <NoticeAction a={a} pa={pa} contract={contract} last={lastNotices(invoices).get(a.id)} onPreview={setNotice} primary />
                 </div>
               )}
+              {notice && <NoticeModal draft={notice} onClose={() => setNotice(null)} />}
             </Card>
           )}
         </div>
@@ -323,10 +353,14 @@ export default function AccountDetail() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
                         <Chip tone={o.type === 'Price Normalization' ? 'accent' : 'neutral'}>{o.type}</Chip>
-                        <span className="text-[12px] text-muted">{o.stage}</span>
+                        <select aria-label={`Stage for the ${o.type} deal`} value={o.stage} onChange={(e) => moveOpp(o.id, e.target.value as OppStage)} className="h-7 rounded-full border border-transparent bg-accent-soft pl-2.5 pr-6 text-[12px] text-ink outline-none hover:bg-accent-soft-2 focus:border-line-strong">
+                          {OPP_STAGES.map((st) => (
+                            <option key={st} value={st}>{st}</option>
+                          ))}
+                        </select>
                       </div>
                       <div className="mt-1 truncate text-[13px] text-muted">{o.products.map((p) => PRODUCT[p].name).join(', ')}</div>
-                      {o.reason && <div className="mt-0.5 text-[12px] text-ink-2">{o.reason}</div>}
+                      {o.reason && !isOpenStage(o.stage) && <div className="mt-0.5 text-[12px] text-ink-2">{o.reason}</div>}
                     </div>
                     <span className="tabular shrink-0 text-[15px] text-ink">{money(o.arr)}</span>
                   </li>
@@ -354,7 +388,7 @@ export default function AccountDetail() {
               </Button>
             </form>
             <ul className="flex flex-col gap-3">
-              {acts.slice(0, 12).map((x) => (
+              {acts.slice(actCur * 8, actCur * 8 + 8).map((x) => (
                 <li key={x.id} className="text-[14px]">
                   <div className="text-ink">{x.text}</div>
                   <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-muted">
@@ -366,6 +400,7 @@ export default function AccountDetail() {
               ))}
               {!acts.length && <li className="text-[14px] text-muted">No activity yet. Add a note to start the record.</li>}
             </ul>
+            <Pager page={actCur} pages={actPages} onPage={setActPage} total={acts.length} size={8} noun="activities" className="-mx-5 mt-3 -mb-5" />
             {mails.length > 0 && (
               <Link to={`/outreach?account=${a.id}`} className="mt-4 inline-block">
                 <TextLink>See {mails.length} outreach messages</TextLink>

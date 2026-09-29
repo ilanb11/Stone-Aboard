@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { CloudRain, Snowflake, Sun, ThermometerSnowflake, ThermometerSun } from 'lucide-react'
 import type { Account } from '../../types'
@@ -8,6 +8,7 @@ import { Card, Chip, Pill, StatusBadge } from '../../components/ui'
 import { type Geo, accountInGeo } from '../../components/GeoFilter'
 import { num } from '../../lib/format'
 import { EVENT_KINDS, EVENT_RULES, type ImpactGroup, type WeatherEventKind, type WeatherImpact } from '../../lib/weatherImpact'
+import { Pager, pageCount, pageOf } from '../../components/Pager'
 
 export const EVENT_ICON: Record<WeatherEventKind, typeof Sun> = {
   'Heat wave': ThermometerSun,
@@ -101,12 +102,17 @@ function ImpactCard({ g }: { g: ImpactGroup }) {
 export function WeatherImpactView({ impact, geo }: { impact: WeatherImpact; geo: Geo }) {
   const [kind, setKind] = useState<'All' | WeatherEventKind>('All')
   const groups = impactInGeo(impact.groups, geo).filter((g) => kind === 'All' || g.kind === kind)
+  const [page, setPage] = useState(0)
+  // The area filter lives above this view, so a change there arrives only as a new geo.
+  useEffect(() => setPage(0), [geo.region, geo.state, geo.county])
+  const pages = pageCount(groups.length, 6)
+  const cur = Math.min(page, pages - 1)
   const accounts = new Set(groups.flatMap((g) => g.accounts.map((a) => a.id)))
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-center gap-1.5">
         {(['All', ...EVENT_KINDS] as const).map((k) => (
-          <Pill key={k} active={kind === k} onClick={() => setKind(k)}>
+          <Pill key={k} active={kind === k} onClick={() => { setKind(k); setPage(0) }}>
             {k === 'All' ? 'All events' : k}
           </Pill>
         ))}
@@ -129,7 +135,8 @@ export function WeatherImpactView({ impact, geo }: { impact: WeatherImpact; geo:
         </details>
       </Card>
       {impact.status === 'ready' && !groups.length && <p className="px-1 text-[14px] text-muted">No significant weather events at customer or prospect locations{geo.state !== 'All' || geo.region !== 'All' ? ' in this area' : ''} for the next 7 days.</p>}
-      <div className="grid gap-4 xl:grid-cols-2">{groups.map((g) => <ImpactCard key={g.id} g={g} />)}</div>
+      <div className="grid gap-4 xl:grid-cols-2">{pageOf(groups, cur, 6).map((g) => <ImpactCard key={g.id} g={g} />)}</div>
+      <Pager page={cur} pages={pages} onPage={setPage} total={groups.length} size={6} noun="events" className="rounded-[var(--radius-card)] border border-line bg-surface" />
     </div>
   )
 }

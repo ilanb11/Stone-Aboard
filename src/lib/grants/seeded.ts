@@ -25,7 +25,9 @@ const P = {
 const DISTRICT = (who: string) => `The county Soil and Water Conservation District office (${who})`
 const STATE_FORMS = ['Program application from the local conservation district', 'Farm map with practice locations', 'Contractor quotes for each practice']
 
-const CATALOG: Grant[] = [
+type CatalogEntry = Omit<Grant, 'kind' | 'funds'> & Partial<Pick<Grant, 'kind' | 'funds'>>
+
+const ENTRIES: CatalogEntry[] = [
   // ---------- federal ----------
   {
     id: 'nrcs-eqip',
@@ -407,6 +409,75 @@ const CATALOG: Grant[] = [
     applyVia: 'The California Department of Food and Agriculture grants portal',
   },
 ]
+
+// What each program can fund from a ThiboLiSoft purchase (demo mapping, simplified).
+const FUNDS: Record<string, Grant['funds']> = {
+  'nrcs-eqip': { products: ['agronomyview', 'fieldtrack', 'tracelink', 'feedopt', 'pastureview'], sharePct: 75, note: 'Precision nutrient management, grazing and record-keeping technology under the nutrient management (590) and prescribed grazing (528) practices.' },
+  'nrcs-csp': { products: ['agronomyview', 'fieldtrack', 'pastureview'], sharePct: 60, note: 'Precision agriculture enhancements (E590, E528) paid as annual stewardship payments.' },
+  'aphis-adt': { products: ['tracelink'], sharePct: 50, note: 'Traceability records that go with official electronic ID tags.' },
+  'rd-reap': { products: ['barnsense', 'binsense'], sharePct: 50, note: 'Ventilation, fan and aeration controls that cut energy use count as energy efficiency improvements.' },
+  'il-cpp': { products: ['agronomyview', 'fieldtrack'], sharePct: 60, note: 'Nutrient and field records that document the conservation practices.' },
+  'ia-wqi': { products: ['agronomyview', 'fieldtrack'], sharePct: 50, note: 'Nitrogen management and field records for Nutrient Reduction Strategy practices.' },
+  'in-cwi': { products: ['agronomyview', 'fieldtrack', 'tracelink'], sharePct: 50, note: 'Nutrient and manure records for district cost-share practices.' },
+  'mn-agri-lig': { products: ['barnsense', 'herdtrack', 'healthwatch'], sharePct: 10, note: 'Barn monitoring and herd technology as part of a livestock facility investment.' },
+  'nc-acsp': { products: ['tracelink', 'barnsense'], sharePct: 75, note: 'Waste management records and lagoon-level monitoring for animal waste plans.' },
+  'oh-h2ohio': { products: ['agronomyview', 'fieldtrack'], sharePct: 50, note: 'Voluntary nutrient management plan records and variable-rate recommendations.' },
+  'mo-swc': { products: ['agronomyview', 'pastureview'], sharePct: 75, note: 'Nutrient and grazing management records.' },
+  'tx-wqmp': { products: ['tracelink', 'pastureview'], sharePct: 75, note: 'Records that document the water quality management plan.' },
+  'pa-reap': { products: ['agronomyview', 'fieldtrack', 'barnsense'], sharePct: 75, note: 'Precision agriculture and barn monitoring equipment under an approved plan.' },
+  'wi-swrm': { products: ['agronomyview', 'fieldtrack'], sharePct: 70, note: 'Nutrient management plan records.' },
+  'ok-llcs': { products: ['pastureview'], sharePct: 75, note: 'Grazing management records.' },
+  'irs-rd': { products: ['herdtrack', 'feedopt', 'barnsense', 'healthwatch', 'tracelink', 'pastureview', 'fieldtrack', 'agronomyview', 'binsense', 'advisory'], sharePct: 8, note: 'The share of the subscription used in on-farm trials (rations, ventilation settings, variable-rate seeding) may count toward qualified research expenses. Staff time on the trials usually counts for more; the accountant decides.' },
+}
+
+const EXTRA: CatalogEntry[] = [
+  {
+    id: 'rd-reap',
+    name: 'Rural Energy for America Program (energy efficiency grants)',
+    shortName: 'USDA REAP',
+    agency: 'USDA Rural Development',
+    level: 'Federal',
+    summary: 'Grants toward energy efficiency improvements on farms, such as ventilation, fan and grain aeration controls.',
+    topics: ['conservation'],
+    operations: ALL,
+    eligibility: [
+      { kind: 'operation', operations: ALL },
+      { kind: 'confirm', label: 'At least half of gross income from agricultural operations' },
+      { kind: 'confirm', label: 'Energy assessment or audit for the project' },
+      { kind: 'confirm', label: 'SAM.gov registration (UEI number)' },
+    ],
+    award: { max: 500000, costSharePct: 50, basis: 'Up to 50% of eligible project costs, up to $500,000 for energy efficiency' },
+    deadline: { kind: 'quarterly', dates: [[10, 31], [1, 31], [3, 31], [6, 30]], label: 'Quarterly application windows' },
+    practices: [],
+    attachments: ['REAP grant application (Form RD 4280-3B)', 'Energy assessment', 'Quotes for the equipment and subscription', 'SAM.gov registration'],
+    applyVia: 'The USDA Rural Development state office',
+    sourceUrl: 'https://www.rd.usda.gov/',
+  },
+  {
+    id: 'irs-rd',
+    kind: 'Tax credit',
+    name: 'Credit for Increasing Research Activities (IRC §41, Form 6765)',
+    shortName: 'Federal R&D tax credit',
+    agency: 'Internal Revenue Service (with the customer’s accountant)',
+    level: 'Federal',
+    summary: 'A federal tax credit for qualified research. Farms that run structured trials (rations, ventilation settings, seeding rates) with our data may have qualifying costs. Something to review with the customer’s accountant, not a grant application.',
+    topics: [],
+    operations: ALL,
+    eligibility: [
+      { kind: 'operation', operations: ALL },
+      { kind: 'confirm', label: 'Activities meet the four-part test (technological, uncertainty, experimentation, permitted purpose)' },
+      { kind: 'confirm', label: 'Trial records kept while the work happens' },
+      { kind: 'confirm', label: 'Accountant confirms the credit and any state R&D credit' },
+    ],
+    award: { max: 250000, costSharePct: 8, basis: 'Roughly 6 to 10% of qualified research expenses under the simplified method; the accountant sets the real figure' },
+    deadline: { kind: 'annual', month: 4, day: 15, label: 'Claimed with the federal return (Form 6765)' },
+    practices: [],
+    attachments: ['Trial plans and results from ThiboLiSoft records', 'Staff time on trials', 'Subscription invoices for the trial period'],
+    applyVia: 'The customer’s accountant, on the federal return',
+  },
+]
+
+const CATALOG: Grant[] = [...ENTRIES, ...EXTRA].map((g) => ({ ...g, kind: g.kind ?? 'Grant', funds: g.funds ?? FUNDS[g.id] ?? { products: [], sharePct: 0, note: '' } }))
 
 const BY_ID: Record<string, Grant> = Object.fromEntries(CATALOG.map((g) => [g.id, g]))
 

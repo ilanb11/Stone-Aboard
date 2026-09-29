@@ -59,6 +59,16 @@ function rngFor(id: string) {
 
 const cache = new Map<string, [number, number]>()
 const boundsCache = new Map<string, [[number, number], [number, number]]>()
+const centerCache = new Map<string, [number, number]>()
+
+/** [lon, lat] at the middle of a county, when the atlas has it. */
+export function countyCenter(a: Pick<Account, 'state' | 'county'>, atlas: CountyAtlas): [number, number] | undefined {
+  const county = atlas.byKey.get(countyKey(a))
+  if (!county) return undefined
+  const c = centerCache.get(county.fips) ?? (geoCentroid(county.feature) as [number, number])
+  centerCache.set(county.fips, c)
+  return c
+}
 
 /** [lon, lat] inside the account's county (falls back to its stored point). */
 export function placeFarm(a: Account, atlas: CountyAtlas): [number, number] {

@@ -9,10 +9,14 @@ import { aiRewriteOutreach } from '../lib/lucas'
 import { Button, Card, Chip, PageHeader, Pill, StatusBadge, Tabs, TextLink, inputClass } from '../components/ui'
 import { InvoicePreview } from '../components/InvoicePreview'
 import { relDays } from '../lib/format'
+import { Pager } from '../components/Pager'
 
 // Editor fields share the design-system field style; the textarea sizes by rows instead of a fixed height.
 const subjectClass = `${inputClass} w-full font-medium`
 const bodyClass = `${inputClass.replace('h-9', 'py-2.5')} w-full resize-y leading-relaxed`
+
+// Messages drafted outside the signal playbooks.
+const OTHER_PLAYBOOK: Record<string, string> = { pricing: 'Price notice', reconnect: 'Reconnect', 'trip-meeting': 'Meeting request (trip)', 'grant-intro': 'Grant application', 'tax-credit': 'R&D tax credit note', 'price-change': 'Price change and invoice', 'mail-reply': 'Reply to a deal email' }
 
 const EMPTY: Record<OutreachStatus | 'All', string> = {
   Draft: 'No drafts waiting for approval.',
@@ -30,6 +34,11 @@ function Item({ o }: { o: Outreach }) {
   const approvePriceChange = useCrm((s) => s.approvePriceChange)
   const skipOutreach = useCrm((s) => s.skipOutreach)
   const invoice = useCrm((s) => (o.invoiceId ? s.invoices.find((i) => i.id === o.invoiceId) : undefined))
+  const contract = useCrm((s) => (o.contractId ? s.contracts.find((c) => c.id === o.contractId) : undefined))
+  // Only the intro email of a Draft contract approves the contract; any other contract email just sends.
+  const introFor = contract?.status === 'Draft' && contract.draft?.emailId === o.id ? contract : undefined
+  // A lost deal voids its contract, so Lucas's emails for it wait until the deal reopens. Replies to deal mail still send.
+  const voided = contract?.status === 'Void' && o.playbook !== 'mail-reply'
   const [open, setOpen] = useState(o.status === 'Draft')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -43,7 +52,7 @@ function Item({ o }: { o: Outreach }) {
           <button className="block w-full text-left" aria-expanded={open} onClick={() => setOpen(!open)}>
             <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
               <StatusBadge tone={tone}>{o.status}</StatusBadge>
-              <Chip>{o.contractId ? 'Contract email (Lucas the Hog)' : o.invoiceId ? 'Price change and invoice' : PLAYBOOK[o.playbook]?.name ?? 'Price notice'}</Chip>
+              <Chip>{o.playbook === 'mail-reply' ? OTHER_PLAYBOOK['mail-reply'] : o.contractId ? 'Contract email (Lucas the Hog)' : o.invoiceId ? 'Price change and invoice' : PLAYBOOK[o.playbook]?.name ?? OTHER_PLAYBOOK[o.playbook] ?? 'Email'}</Chip>
               {invoice && <span className="inline-flex items-center gap-1 text-[13px] text-ink-2"><FileText size={12} aria-hidden /> ${invoice.total.toLocaleString('en-US', { maximumFractionDigits: 0 })}/mo invoice</span>}
               {o.auto && <Chip tone="dim">Auto</Chip>}
               <span className="text-[13px] text-muted">{o.trigger}</span>
@@ -61,7 +70,11 @@ function Item({ o }: { o: Outreach }) {
         {o.status === 'Draft' && (
           <div className="flex shrink-0 flex-wrap gap-2">
             <Button size="sm" variant="ghost" onClick={() => skipOutreach(o.id)} title={invoice ? 'Skips the email and voids its invoice' : undefined}><X size={12} /> Skip</Button>
-            <Button size="sm" variant="primary" onClick={() => (o.contractId ? approveDraft(o.contractId) : invoice ? approvePriceChange(o.id) : send(o.id))} title={o.contractId ? 'Approves the contract and sends this email' : invoice ? 'Sends this email with its invoice' : undefined}><Send size={12} /> {invoice ? 'Approve and send both' : 'Approve and send'}</Button>
+            {voided ? (
+              <span className="self-center text-[13px] text-muted" title="Reopening the deal revives the contract and this email">Contract void (deal lost)</span>
+            ) : (
+              <Button size="sm" variant="primary" onClick={() => (introFor ? approveDraft(introFor.id) : invoice ? approvePriceChange(o.id) : send(o.id))} title={introFor ? 'Approves the contract and sends this email' : invoice ? 'Sends this email with its invoice' : undefined}><Send size={12} /> {invoice ? 'Approve and send both' : 'Approve and send'}</Button>
+            )}
           </div>
         )}
       </div>
@@ -135,10 +148,21 @@ export default function OutreachPage() {
   const accountFilter = params.get('account')
   const [kind, setKind] = useState<'all' | 'price'>(params.get('kind') === 'price' ? 'price' : 'all')
   const [tab, setTab] = useState<OutreachStatus | 'All'>(accountFilter ? 'All' : 'Draft')
-  const inScope = (o: Outreach) => (!accountFilter || o.accountId === accountFilter) && (kind === 'all' || !!o.invoiceId)
+  const [page, setPage] = useState(0)
+  // The account filter lives in the URL ("Show all accounts", back and forward), so reset the page when it changes.
+  const [pageFor, setPageFor] = useState(accountFilter)
+  if (pageFor !== accountFilter) {
+    setPageFor(accountFilter)
+    setPage(0)
+  }
+  const forAccount = (o: Outreach) => !accountFilter || o.accountId === accountFilter
+  const inScope = (o: Outreach) => forAccount(o) && (kind === 'all' || !!o.invoiceId)
   const list = outreach.filter((o) => (tab === 'All' || o.status === tab) && inScope(o)).sort((a, b) => (b.sentAt ?? b.createdAt).localeCompare(a.sentAt ?? a.createdAt))
+  const pages = Math.ceil(list.length / 10)
+  // Approving or skipping moves drafts off the tab, so the open page can run past the end.
+  const cur = Math.min(page, Math.max(0, pages - 1))
   const count = (s: OutreachStatus) => outreach.filter((o) => o.status === s && inScope(o)).length
-  const priceDrafts = outreach.filter((o) => o.invoiceId && o.status === 'Draft').length
+  const priceDrafts = outreach.filter((o) => o.invoiceId && o.status === 'Draft' && forAccount(o)).length
 
   return (
     <div>
@@ -161,7 +185,7 @@ export default function OutreachPage() {
           <div className="px-5 pt-5">
             <Tabs
               value={tab}
-              onChange={setTab}
+              onChange={(v) => { setTab(v); setPage(0) }}
               tabs={[
                 { value: 'Draft', label: <TabLabel label="Awaiting approval" n={count('Draft')} /> },
                 { value: 'Sent', label: <TabLabel label="Sent" n={count('Sent')} /> },
@@ -170,11 +194,12 @@ export default function OutreachPage() {
               ]}
             />
             <div className="-mt-2 mb-4 flex flex-wrap gap-1.5" role="group" aria-label="Message type">
-              <Pill active={kind === 'all'} onClick={() => setKind('all')}>Every message</Pill>
-              <Pill active={kind === 'price'} onClick={() => setKind('price')}>Price changes with invoices{priceDrafts ? ` · ${priceDrafts} waiting` : ''}</Pill>
+              <Pill active={kind === 'all'} onClick={() => { setKind('all'); setPage(0) }}>Every message</Pill>
+              <Pill active={kind === 'price'} onClick={() => { setKind('price'); setPage(0) }}>Price changes with invoices{priceDrafts ? ` · ${priceDrafts} waiting` : ''}</Pill>
             </div>
           </div>
-          {list.length > 0 && <ul className="divide-y divide-line border-t border-line">{list.slice(0, 100).map((o) => <Item key={o.id} o={o} />)}</ul>}
+          {list.length > 0 && <ul className="divide-y divide-line border-t border-line">{list.slice(cur * 10, cur * 10 + 10).map((o) => <Item key={o.id} o={o} />)}</ul>}
+          <Pager page={cur} pages={pages} onPage={setPage} total={list.length} size={10} noun="messages" />
           {!list.length && <div className="border-t border-line px-5 py-10 text-center text-[14px] text-muted">{EMPTY[tab]}</div>}
         </Card>
         <Card title="Playbooks and automation">

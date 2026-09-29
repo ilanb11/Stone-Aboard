@@ -2,10 +2,11 @@ import { Link } from 'react-router-dom'
 import { CircleAlert, CircleCheck, CircleHelp, Landmark } from 'lucide-react'
 import type { Account } from '../types'
 import { STATES } from '../data/geo'
+import { PRODUCT } from '../data/products'
 import { useCrm } from '../store'
 import { num } from '../lib/format'
 import { affectedAccounts, applicationsForChange, awardText, checkEligibility, deadlineText, describeEligibility, grantSource, grantsForChange, type CheckStatus, type Grant, type RegulatoryChange } from '../lib/grants'
-import { Button, Chip } from './ui'
+import { Chip } from './ui'
 
 const STATUS_ICON: Record<CheckStatus, { icon: typeof CircleCheck; cls: string; word: string }> = {
   Met: { icon: CircleCheck, cls: 'text-good', word: 'Met' },
@@ -50,6 +51,23 @@ export function GrantProgram({ g, account, action }: { g: Grant; account?: Accou
             <Deadline g={g} />
           </dd>
         </div>
+        {g.funds.products.length > 0 &&
+          (g.kind === 'Tax credit' ? (
+            // Nobody pays a share of the cost here; the credit depends on what the accountant counts as research.
+            <div className="min-w-0 sm:col-span-2">
+              <dt className="text-muted">May count toward qualified research</dt>
+              <dd className="mt-0.5 text-ink">The share of the ThiboLiSoft subscription used in structured trials, to confirm with the accountant</dd>
+              <dd className="text-[12px] text-muted">{g.funds.note}</dd>
+            </div>
+          ) : (
+            <div className="min-w-0 sm:col-span-2">
+              <dt className="text-muted">Pays for, from a ThiboLiSoft purchase</dt>
+              <dd className="mt-0.5 text-ink">
+                {g.funds.products.map((p) => PRODUCT[p]?.name ?? p).join(', ')} <span className="text-muted">· {g.funds.sharePct}% of their cost</span>
+              </dd>
+              <dd className="text-[12px] text-muted">{g.funds.note}</dd>
+            </div>
+          ))}
         <div className="min-w-0 sm:col-span-2">
           <dt className="text-muted">Eligibility</dt>
           <dd className="mt-1">
@@ -81,8 +99,6 @@ export function GrantProgram({ g, account, action }: { g: Grant; account?: Accou
 export function LawChangeGrants({ change }: { change: RegulatoryChange }) {
   const accounts = useCrm((s) => s.accounts)
   const apps = useCrm((s) => s.grantApplications)
-  const triggered = useCrm((s) => s.grantTriggered[change.signal.id])
-  const draftGrantsForSignal = useCrm((s) => s.draftGrantsForSignal)
   const affected = affectedAccounts(change, accounts)
   const customers = affected.filter((a) => a.status === 'Customer').length
   const grants = grantsForChange(change)
@@ -112,12 +128,7 @@ export function LawChangeGrants({ change }: { change: RegulatoryChange }) {
               Review {num(drafted.length)} {drafted.length === 1 ? 'application' : 'applications'}
             </Link>
           )}
-          {!triggered && grants.length > 0 && affected.length > drafted.length && (
-            <Button size="sm" onClick={() => draftGrantsForSignal(change.signal.id)}>
-              Pre-draft applications for {num(affected.length - drafted.length)} {affected.length - drafted.length === 1 ? 'account' : 'accounts'}
-            </Button>
-          )}
-          <span className="text-muted">Applications are drafts for review. Nothing is submitted.</span>
+          <span className="text-muted">Applications are pre-drafted automatically for affected accounts that are buying from us, when a program covers at least half of the purchase. Drafts for review; nothing is submitted.</span>
         </div>
         <p className="text-[12px] text-muted">{grantSource.disclaimer}</p>
       </div>

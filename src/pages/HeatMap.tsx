@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { ArrowLeft, ArrowUpRight } from 'lucide-react'
 import { useBook, signalsByAccount } from '../lib/useData'
 import { STATES, STATE_LIST } from '../data/geo'
@@ -11,6 +11,8 @@ import { money, num, relDays, shortDate, sizeLabel } from '../lib/format'
 import { mrr } from '../lib/pricing'
 import { loadCountyAtlas, placeFarm, type County, type CountyAtlas } from '../lib/placement'
 import { combined, computePenetration, marketUnits, type Penetration, type Split } from '../lib/penetration'
+import { TripPlanner } from '../components/TripPlanner'
+import { Pager } from '../components/Pager'
 
 type Filter = 'All' | Species
 type View = 'heat' | 'penetration'
@@ -59,6 +61,13 @@ function binner(values: number[], ramp: string[]) {
 
 export default function HeatMap() {
   const book = useBook()
+  // /map#trip (from the dashboard) scrolls to the trip planner.
+  const { hash } = useLocation()
+  useEffect(() => {
+    if (hash !== '#trip') return
+    const t = setTimeout(() => document.getElementById('trip')?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 150)
+    return () => clearTimeout(t)
+  }, [hash])
   const [filter, setFilter] = useState<Filter>('All')
   const [view, setView] = useState<View>('heat')
   const [heatBy, setHeatBy] = useState<HeatBy>('farms')
@@ -67,13 +76,14 @@ export default function HeatMap() {
   const [focus, setFocus] = useState<{ code: string | null; n: number }>({ code: null, n: 0 })
   const [farm, setFarm] = useState<string | null>(null)
   const [atlas, setAtlas] = useState<CountyAtlas | null>(null)
+  const [atlasFailed, setAtlasFailed] = useState(false)
   const [mode, setMode] = useState<'heat' | 'blend' | 'farms'>('heat')
 
   useEffect(() => {
     let live = true
     loadCountyAtlas()
       .then((a) => live && setAtlas(a))
-      .catch(() => undefined) // stay on state-level positions if the atlas can't load
+      .catch(() => live && setAtlasFailed(true)) // stay on state-level positions if the atlas can't load
     return () => {
       live = false
     }
@@ -315,12 +325,14 @@ export default function HeatMap() {
           {farm ? (
             <FarmPanel a={book.byId[farm]} opps={oppsByAccount[farm] ?? []} openValue={openValue(farm)} onBack={() => setFarm(null)} />
           ) : selState ? (
-            <StatePanel code={selState} filter={filter} pen={pen} book={book} inFilter={inFilter} onBack={() => selectState(null)} onFarm={setFarm} />
+            <StatePanel key={`${selState}|${filter}`} code={selState} filter={filter} pen={pen} book={book} inFilter={inFilter} onBack={() => selectState(null)} onFarm={setFarm} />
           ) : (
             <NationalPanel filter={filter} pen={pen} filtered={filtered} />
           )}
         </div>
       </div>
+
+      <TripPlanner onFocusState={(code) => selectState(code)} atlas={atlas} atlasLoading={!atlas && !atlasFailed} />
     </div>
   )
 }
@@ -379,6 +391,53 @@ function PenBar({ label, s }: { label: string; s: Split }) {
   )
 }
 
+/** Of the farms we track, the share that are customers (vended), by count and by size. */
+function TrackedSplit({ accounts, filter }: { accounts: Account[]; filter: Filter }) {
+  const types = filter === 'All' ? OPERATION_TYPES : [filter]
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-[14px] text-ink">Customer vended share of tracked farms</div>
+      {types.map((sp) => {
+        const list = accounts.filter((a) => a.species === sp && a.status !== 'Churned')
+        const vended = list.filter((a) => a.status === 'Customer')
+        const size = list.reduce((s, a) => s + marketUnits(a), 0)
+        const vSize = vended.reduce((s, a) => s + marketUnits(a), 0)
+        const byCount = list.length ? vended.length / list.length : 0
+        const bySize = size ? vSize / size : 0
+        // No farms of this type: an empty track, not a bar of prospects.
+        if (!list.length)
+          return (
+            <div key={sp} className="min-w-0">
+              <div className="mb-1.5 flex items-baseline justify-between gap-2 text-[13px]">
+                <span className="text-ink">{OPERATION_LABEL[sp]}</span>
+                <span className="text-muted">No tracked farms</span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-accent-soft-2" role="img" aria-label={`${OPERATION_LABEL[sp]}: no tracked farms`} />
+            </div>
+          )
+        return (
+          <div key={sp} className="min-w-0">
+            <div className="mb-1.5 flex items-baseline justify-between gap-2 text-[13px]">
+              <span className="text-ink">{OPERATION_LABEL[sp]}</span>
+              <span className="tabular text-ink">{pct(byCount)} vended</span>
+            </div>
+            <div className="flex h-2 w-full overflow-hidden rounded-full bg-accent-soft-2" role="img" aria-label={`${OPERATION_LABEL[sp]}: ${vended.length} of ${list.length} tracked farms are customers (${pct(byCount)}), ${pct(bySize)} of tracked size`}>
+              <span style={{ width: `${byCount * 100}%`, background: 'var(--color-heat-4)' }} />
+              <span style={{ width: `${(1 - byCount) * 100}%`, background: 'var(--color-warm-3)' }} />
+            </div>
+            <div className="mt-1 flex flex-wrap gap-x-3 text-[12px] text-muted">
+              <span>
+                {num(vended.length)} customers of {num(list.length)} tracked farms
+              </span>
+              <span>{pct(bySize)} of tracked {sp === 'Grain' ? 'acres' : 'head'}</span>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function PenKey() {
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ink-2">
@@ -412,6 +471,7 @@ function NationalPanel({ filter, pen, filtered }: { filter: Filter; pen: Penetra
         <Figure label="ARR" value={money(customers.reduce((s, a) => s + mrr(a) * 12, 0))} />
       </div>
       <div className="mt-6 flex flex-col gap-4 border-t border-line pt-5">
+        <TrackedSplit accounts={filtered} filter={filter} />
         <div className="text-[14px] text-ink">Market penetration</div>
         {(filter === 'All' ? OPERATION_TYPES : [filter]).map((sp) => (
           <PenBar key={sp} label={OPERATION_LABEL[sp]} s={pen.national[sp]} />
@@ -432,6 +492,9 @@ function StatePanel({ code, filter, pen, book, inFilter, onBack, onFarm }: { cod
     .filter((c) => c.state === code)
     .sort((a, b) => b.vended + b.unvended - (a.vended + a.unvended))
   const top = book.ranked.filter((r) => r.account.state === code && inFilter(r.account.species)).slice(0, 4)
+  const [cPage, setCPage] = useState(0)
+  const cPages = Math.ceil(counties.length / 8)
+  const cCur = Math.min(cPage, Math.max(0, cPages - 1))
   return (
     <>
       <section className="min-w-0 rounded-[var(--radius-card)] border border-line bg-surface p-5">
@@ -449,6 +512,7 @@ function StatePanel({ code, filter, pen, book, inFilter, onBack, onFarm }: { cod
           <Figure label="Pipeline" value={money(pipeline)} />
         </div>
         <div className="mt-6 flex flex-col gap-4 border-t border-line pt-5">
+          <TrackedSplit accounts={accts} filter={filter} />
           <div className="text-[14px] text-ink">Market penetration</div>
           {(filter === 'All' ? OPERATION_TYPES : [filter]).map((sp) => (
             <PenBar key={sp} label={OPERATION_LABEL[sp]} s={pen.state[code][sp]} />
@@ -472,7 +536,7 @@ function StatePanel({ code, filter, pen, book, inFilter, onBack, onFarm }: { cod
               </tr>
             </thead>
             <tbody>
-              {counties.map((c) => {
+              {counties.slice(cCur * 8, cCur * 8 + 8).map((c) => {
                 const share = c.vended / (c.vended + c.unvended || 1)
                 return (
                   <tr key={c.county} className="border-t border-line">
@@ -495,6 +559,7 @@ function StatePanel({ code, filter, pen, book, inFilter, onBack, onFarm }: { cod
         ) : (
           <div className="px-5 pb-4 pt-2 text-[14px] text-muted">No tracked farms in {st.name} for this operation type.</div>
         )}
+        <Pager page={cCur} pages={cPages} onPage={setCPage} total={counties.length} size={8} noun="counties" />
         <p className="px-5 pb-4 pt-2 text-[12px] text-muted">Vended share is the part of tracked farm size (head or acres) that belongs to customers.</p>
       </Card>
 

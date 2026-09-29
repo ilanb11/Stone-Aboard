@@ -2,6 +2,10 @@ import type { Account, Contract } from '../types'
 import { PRODUCT } from '../data/products'
 
 export const CPI_ESTIMATE = 2.9 // % used for CPI-linked escalators
+/** A renewal notice deadline this close makes the renewal the pricing window, not the escalator clause. */
+export const RENEWAL_SOON_DAYS = 120
+/** Largest single price move Herdbook recommends, at an anniversary or a renewal. */
+export const MAX_MOVE_PCT = 25
 const DAY = 86400000
 
 /** Volume-based discount a peer of this size would normally get (fraction). */
@@ -35,6 +39,8 @@ function nextAnniversary(start: Date, after: Date): Date {
 export function contractAbility(c: Contract, today = new Date()): Ability {
   const end = new Date(c.end)
   const renewalNotice = new Date(end.getTime() - c.renewalNoticeDays * DAY)
+  // Without auto-renew the term just ends, so a missed notice date doesn't lock in current pricing.
+  const expiring = !c.autoRenew && end > today
   const renewal = (why: string): Ability => {
     const noticeBy = renewalNotice
     const late = noticeBy < today
@@ -43,12 +49,17 @@ export function contractAbility(c: Contract, today = new Date()): Ability {
       effectiveDate: end.toISOString(),
       noticeBy: noticeBy.toISOString(),
       maxIncreasePct: null,
-      canActNow: !late,
-      explanation: late
-        ? `${why} The renewal notice window (${c.renewalNoticeDays} days before ${end.toLocaleDateString()}) has passed${c.autoRenew ? ', so the contract auto-renews at current pricing. Next opportunity is the following renewal.' : '. Renegotiate as part of the renewal conversation.'}`
-        : `${why} Pricing can be reset at renewal on ${end.toLocaleDateString()}; propose new pricing by ${noticeBy.toLocaleDateString()}.`,
+      canActNow: !late || expiring,
+      explanation: !late
+        ? `${why} Pricing can be reset at renewal on ${end.toLocaleDateString()}; propose new pricing by ${noticeBy.toLocaleDateString()}.`
+        : expiring
+          ? `${why} The renewal notice date (${c.renewalNoticeDays} days before ${end.toLocaleDateString()}) has passed, but the contract doesn't auto-renew, so the renewal can still carry new pricing. Propose it now.`
+          : `${why} The renewal notice window (${c.renewalNoticeDays} days before ${end.toLocaleDateString()}) has passed${c.autoRenew ? ', so the contract auto-renews at current pricing. Next opportunity is the following renewal.' : '. Renegotiate as part of the renewal conversation.'}`,
     }
   }
+  // A contract that's about to expire can be repriced at renewal, whatever its price clause says.
+  const noticeLeft = renewalNotice.getTime() - today.getTime()
+  if ((noticeLeft >= 0 && noticeLeft <= RENEWAL_SOON_DAYS * DAY) || (noticeLeft < 0 && expiring)) return renewal(`The agreement is up for renewal on ${end.toLocaleDateString()}, so pricing can be reset at renewal regardless of the price clause.`)
   const { mechanism, capPct, noticeDays, lockUntil } = c.price
   if (mechanism === 'Multi-year price lock' && lockUntil && new Date(lockUntil) > today) {
     const lu = new Date(lockUntil)
@@ -123,13 +134,14 @@ export function analyzePricing(a: Account, c: Contract | undefined, allCustomers
   const mfnExposure: string[] = []
   if (status === 'Under-priced') {
     const cap = ability?.maxIncreasePct
-    recommendedPct = cap == null ? neededPct : Math.min(neededPct, cap)
+    // At renewal there's no contractual cap, but one move never exceeds MAX_MOVE_PCT.
+    recommendedPct = Math.min(neededPct, cap ?? MAX_MOVE_PCT)
     const gap = neededPct - recommendedPct
     recommendation = !ability
       ? `Pricing is ${neededPct.toFixed(1)}% below the band. No contract is on file.`
       : ability.window === 'Locked'
         ? `Pricing is ${neededPct.toFixed(1)}% below the band, but the price is locked. Plan a +${recommendedPct.toFixed(1)}% increase effective ${new Date(ability.effectiveDate).toLocaleDateString()}.`
-        : `Raise ${recommendedPct.toFixed(1)}% at ${ability.window.toLowerCase()} (${new Date(ability.effectiveDate).toLocaleDateString()}), with notice by ${new Date(ability.noticeBy).toLocaleDateString()}.${gap > 0.5 ? ` That still leaves ${gap.toFixed(1)}% to close at the next window; consider bundling an add-on to close it sooner.` : ''}`
+        : `Raise ${recommendedPct.toFixed(1)}% at ${ability.window.toLowerCase()} (${new Date(ability.effectiveDate).toLocaleDateString()}), ${ability.canActNow && new Date(ability.noticeBy) < today ? "with notice now, as the contract doesn't auto-renew" : `with notice by ${new Date(ability.noticeBy).toLocaleDateString()}`}.${gap > 0.5 ? ` That still leaves ${gap.toFixed(1)}% to close at the next window; consider bundling an add-on to close it sooner.` : ''}`
   } else if (status === 'Over-priced') {
     recommendedPct = 0
     recommendation = `Paying ${Math.abs(neededPct).toFixed(1)}% above peers of this size, which is a churn risk. Don't cut list price. Offer a value bundle (add a module at the price difference) or reset to the band at renewal${ability ? ` (${new Date(ability.effectiveDate).toLocaleDateString()})` : ''}.`

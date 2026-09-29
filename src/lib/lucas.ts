@@ -1,5 +1,5 @@
 import type { Account, Contract, Opportunity } from '../types'
-import { CLAUSE, REDLINE_BY_KEY } from '../data/contracts'
+import { CLAUSE, REDLINE_BY_KEY, REDLINE_LIBRARY } from '../data/contracts'
 import { PRODUCT } from '../data/products'
 
 export interface LucasItem {
@@ -61,7 +61,9 @@ export function dealContext(account: Account, contract: Contract, opp?: Opportun
 
 export function offlineReview(account: Account, contract: Contract, rep: string): LucasReview {
   const items: LucasItem[] = contract.redlines.map((r) => {
-    const t = REDLINE_BY_KEY[r.key]
+    // Asks read from email or customer paper can carry a custom key: use the playbook entry for the same clause.
+    const t = REDLINE_BY_KEY[r.key] ?? REDLINE_LIBRARY.find((x) => x.clauseId === r.clauseId)
+    if (!t) return { redlineId: r.id, recommendation: 'Counter' as const, risk: 'Medium' as const, counterLanguage: r.original, rationale: `No playbook entry for this ask on ${CLAUSE[r.clauseId]?.title ?? r.clauseId}. Hold our template language and ask what problem the change solves for them.` }
     return { redlineId: r.id, recommendation: t.offline.recommendation, risk: t.offline.risk, counterLanguage: t.offline.counter ?? r.proposed, rationale: t.offline.rationale }
   })
   const high = items.filter((i) => i.risk === 'High').length

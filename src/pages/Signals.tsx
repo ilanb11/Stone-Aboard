@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { AlertOctagon, Copy, Mail } from 'lucide-react'
+import { AlertOctagon, Copy, Mail, Newspaper } from 'lucide-react'
+import { Pager, pageCount, pageOf } from '../components/Pager'
 import { useBook, signals, lawChangeBySignal } from '../lib/useData'
 import { useCrm } from '../store'
 import { OPERATION_OPTIONS, type OutreachStatus, type RegionName, type Signal, type SignalType, type Species } from '../types'
@@ -14,6 +15,7 @@ import { affectedAccounts, applicationsForChange, awardText, deadlineText, grant
 import { useWeatherImpact, type ImpactGroup } from '../lib/weatherImpact'
 import { WeatherImpactView, EVENT_ICON, SourceLine, eventWhen, impactInGeo } from './signals/WeatherImpact'
 import { GrantApplicationsView } from './signals/GrantApplications'
+import { purchaseLapse } from '../lib/grantDrafts'
 
 const TYPES: SignalType[] = ['Ownership Change', 'Leadership Change', 'Expansion', 'Contraction', 'Integrator / Packer Change', 'Biosecurity', 'Regulatory', 'Financial']
 const TOPIC: Record<SignalType, string> = {
@@ -36,48 +38,57 @@ export function SignalRow({ s, compact }: { s: Signal; compact?: boolean }) {
   const book = useBook()
   const outreach = useCrm((st) => st.outreach)
   const queueOutreach = useCrm((st) => st.queueOutreach)
+  const [open, setOpen] = useState(false)
   const a = s.accountId ? book.byId[s.accountId] : undefined
   const mail = outreach.find((o) => o.signalId === s.id)
   const change = lawChangeBySignal[s.id]
   return (
-    <li className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <Chip>{s.type}</Chip>
-          {s.severity === 'High' && <StatusBadge tone="serious">High</StatusBadge>}
-          <span className="meta text-muted">{shortDate(s.date)}</span>
-          <span className="text-[13px] text-muted">{s.source}</span>
-          <GeoTag region={s.region} state={s.state} county={s.county} statewide={!s.accountId} />
-        </div>
-        <div className="mt-2 text-[15px] font-medium leading-snug text-ink">{s.headline}</div>
-        {!compact && <p className="mt-1 max-w-[68ch] text-[14px] leading-relaxed text-ink-2">{s.detail}</p>}
+    <li className="px-5 py-3">
+      <div className="flex items-start justify-between gap-4">
+        <button type="button" className="min-w-0 flex-1 text-left" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-muted">
+            <Chip>{s.type}</Chip>
+            {s.severity === 'High' && <StatusBadge tone="serious">High</StatusBadge>}
+            <span className="meta">{shortDate(s.date)}</span>
+            <GeoTag region={s.region} state={s.state} county={s.county} statewide={!s.accountId} />
+            {a && <span className="text-ink-2">{a.name} · {a.status}</span>}
+          </span>
+          <span className="mt-1 block text-[14px] font-medium leading-snug text-ink">{s.headline}</span>
+        </button>
         {a && (
-          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[13px] text-muted">
-            <Link to={`/accounts/${a.id}`} className="text-ink underline-offset-4 hover:underline">{a.name}</Link>
-            <span>{a.status}</span>
-            <span>{a.segment}</span>
+          <div className="shrink-0 pt-0.5 text-right">
+            {mail ? (
+              <Link to={`/outreach?account=${a.id}`}>
+                <TextLink>Outreach {MAIL_STATE[mail.status] ?? mail.status.toLowerCase()}</TextLink>
+              </Link>
+            ) : (
+              <Button size="sm" onClick={() => { const d = draftForSignal(a, s, a.rep); queueOutreach({ accountId: a.id, signalId: s.id, trigger: s.type, playbook: d.playbook, contactName: d.contact.name, contactEmail: d.contact.email, subject: d.subject, body: d.body, auto: false, status: 'Draft' }) }}>
+                <Mail size={12} /> Draft outreach
+              </Button>
+            )}
           </div>
         )}
-        {!compact && change && <LawChangeGrants change={change} />}
       </div>
-      {a && (
-        <div className="shrink-0 sm:pt-0.5 sm:text-right">
-          {mail ? (
-            <Link to={`/outreach?account=${a.id}`}>
-              <TextLink>Outreach {MAIL_STATE[mail.status] ?? mail.status.toLowerCase()}</TextLink>
-            </Link>
-          ) : (
-            <Button size="sm" onClick={() => { const d = draftForSignal(a, s, a.rep); queueOutreach({ accountId: a.id, signalId: s.id, trigger: s.type, playbook: d.playbook, contactName: d.contact.name, contactEmail: d.contact.email, subject: d.subject, body: d.body, auto: false, status: 'Draft' }) }}>
-              <Mail size={12} /> Draft outreach
-            </Button>
-          )}
+      {open && !compact && (
+        <div className="mt-2">
+          <p className="max-w-[68ch] text-[13px] leading-relaxed text-ink-2">{s.detail}</p>
+          <div className="mt-1 flex flex-wrap gap-x-3 text-[12px] text-muted">
+            <span>{s.source}</span>
+            {a && (
+              <Link to={`/accounts/${a.id}`} className="text-ink underline-offset-4 hover:underline">
+                Open {a.name}
+              </Link>
+            )}
+          </div>
         </div>
       )}
+      {!compact && change && <LawChangeGrants change={change} />}
     </li>
   )
 }
 
-function weekStart(d: Date) {
+/** Monday 00:00 of d's week: where a newsletter issue starts. The home page counts the current issue with it too. */
+export function weekStart(d: Date) {
   const x = new Date(d)
   x.setHours(0, 0, 0, 0)
   x.setDate(x.getDate() - ((x.getDay() + 6) % 7))
@@ -108,6 +119,8 @@ function Newsletter({ geo, impact }: { geo: Geo; impact: ReturnType<typeof useWe
   const [wk, setWk] = useState(weeks[0].toISOString())
   const [species, setSpecies] = useState<'All' | Species>('All')
   const [copied, setCopied] = useState<'copied' | 'failed' | null>(null)
+  // Three items per region until someone asks for the rest: the brief stays short.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   useEffect(() => {
     if (!copied) return
     const t = setTimeout(() => setCopied(null), 3000)
@@ -255,7 +268,7 @@ function Newsletter({ geo, impact }: { geo: Geo; impact: ReturnType<typeof useWe
             </p>
             {impact.status === 'ready' && !weather.length && <p className="mt-4 text-[15px] text-ink-2">No significant weather at customer or prospect locations in the next 7 days.</p>}
             <ul className="mt-5 flex flex-col gap-6">
-              {weather.slice(0, 8).map((g) => {
+              {weather.slice(0, 4).map((g) => {
                 const Icon = EVENT_ICON[g.kind]
                 const custs = g.accounts.filter((a) => a.status === 'Customer')
                 return (
@@ -277,7 +290,7 @@ function Newsletter({ geo, impact }: { geo: Geo; impact: ReturnType<typeof useWe
                 )
               })}
             </ul>
-            {weather.length > 8 && (
+            {weather.length > 4 && (
               <Link to="/signals?tab=weather" className="mt-4 inline-block text-[14px] text-ink underline underline-offset-4">
                 All {num(weather.length)} events
               </Link>
@@ -291,7 +304,7 @@ function Newsletter({ geo, impact }: { geo: Geo; impact: ReturnType<typeof useWe
           <section key={r} className="mt-12">
             <SectionHeading sub={plural(list.length, 'change')}>{r}</SectionHeading>
             <ul className="mt-5 flex flex-col gap-6">
-              {list.map((s) => {
+              {(expanded.has(r) ? list : list.slice(0, 3)).map((s) => {
                 const a = s.accountId ? book.byId[s.accountId] : undefined
                 const f = funding(s)
                 return (
@@ -323,6 +336,11 @@ function Newsletter({ geo, impact }: { geo: Geo; impact: ReturnType<typeof useWe
                 )
               })}
             </ul>
+            {list.length > 3 && (
+              <button type="button" className="mt-4 text-[14px] text-ink underline underline-offset-4" onClick={() => setExpanded((prev) => { const n = new Set(prev); if (n.has(r)) n.delete(r); else n.add(r); return n })}>
+                {expanded.has(r) ? 'Show fewer' : `Show all ${list.length} in ${r}`}
+              </button>
+            )}
           </section>
         ))}
 
@@ -337,8 +355,12 @@ function Newsletter({ geo, impact }: { geo: Geo; impact: ReturnType<typeof useWe
   )
 }
 
-type Tab = 'feed' | 'weather' | 'grants' | 'newsletter'
-const TAB_VALUES: Tab[] = ['feed', 'weather', 'grants', 'newsletter']
+type Tab = 'org' | 'weather' | 'regulatory' | 'grants' | 'newsletter'
+const TAB_VALUES: Tab[] = ['org', 'weather', 'regulatory', 'grants', 'newsletter']
+/** Organization changes: everything except regulation (which has its own tab). */
+const ORG_TYPES = TYPES.filter((t) => t !== 'Regulatory')
+const FEED_PAGE = 12
+const PERIODS = [{ value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: '120', label: 'Last 120 days' }]
 
 export default function Signals() {
   const book = useBook()
@@ -346,38 +368,47 @@ export default function Signals() {
   const { geo } = useGeo()
   const impact = useWeatherImpact(book.accounts)
   const apps = useCrm((s) => s.grantApplications)
-  const tab: Tab = TAB_VALUES.includes(params.get('tab') as Tab) ? (params.get('tab') as Tab) : 'feed'
+  // Old links: ?tab=feed (the change feed) and ?type=Regulatory land on the matching category.
+  const rawTab = params.get('tab') === 'feed' ? null : params.get('tab')
+  const tab: Tab = TAB_VALUES.includes(rawTab as Tab) ? (rawTab as Tab) : params.get('type') === 'Regulatory' ? 'regulatory' : 'org'
   const setTab = (t: Tab) =>
     setParams(
       (prev) => {
         const next = new URLSearchParams()
-        // Geography carries across tabs; tab-specific filters don't.
-        for (const k of ['region', 'state', 'county']) if (prev.get(k)) next.set(k, prev.get(k)!)
-        if (t !== 'feed') next.set('tab', t)
+        // Geography and the period carry across tabs; tab-specific filters don't.
+        for (const k of ['region', 'state', 'county', 'days']) if (prev.get(k)) next.set(k, prev.get(k)!)
+        if (t !== 'org') next.set('tab', t)
+        return next
+      },
+      { replace: true },
+    )
+  const setParam = (k: string, v: string, fallback: string) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (v === fallback) next.delete(k)
+        else next.set(k, v)
         return next
       },
       { replace: true },
     )
   const type = params.get('type') ?? 'All'
-  const setType = (v: string) =>
-    setParams(
-      (prev) => {
-        const next = new URLSearchParams(prev)
-        if (v === 'All') next.delete('type')
-        else next.set('type', v)
-        return next
-      },
-      { replace: true },
-    )
+  const setType = (v: string) => setParam('type', v, 'All')
+  // In the URL so the home page's "last 7 days" tile lands on the same window (?days=7).
+  const days = PERIODS.find((p) => p.value === params.get('days'))?.value ?? '30'
+  const setDays = (v: string) => setParam('days', v, '30')
   const [scope, setScope] = useState<'all' | 'customers' | 'prospects' | 'market'>('all')
-  const [days, setDays] = useState('30')
   const [species, setSpecies] = useState<'All' | Species>('All')
   const [q, setQ] = useState('')
+  const [page, setPage] = useState(0)
+  useEffect(() => setPage(0), [geo.region, geo.state, geo.county])
+  const types = tab === 'regulatory' ? (['Regulatory'] as SignalType[]) : ORG_TYPES
   const feed = useMemo(() => {
     const cut = Date.now() - Number(days) * 86400000
     return signals.filter((s) => {
       if (new Date(s.date).getTime() < cut) return false
-      if (type !== 'All' && s.type !== type) return false
+      if (!types.includes(s.type)) return false
+      if (type !== 'All' && type !== 'Regulatory' && s.type !== type) return false
       if (!signalInGeo(s, geo)) return false
       const a = s.accountId ? book.byId[s.accountId] : undefined
       if (scope === 'customers' && a?.status !== 'Customer') return false
@@ -387,24 +418,35 @@ export default function Signals() {
       if (q && !`${s.headline} ${s.detail}`.toLowerCase().includes(q.toLowerCase())) return false
       return true
     })
-  }, [book, type, scope, days, species, q, geo])
+  }, [book, type, scope, days, species, q, geo, tab])
+  const feedPages = pageCount(feed.length, FEED_PAGE)
+  const cur = Math.min(page, feedPages - 1)
   const weatherCount = impact.status === 'ready' ? impactInGeo(impact.groups, geo).length : undefined
-  const draftCount = apps.filter((a) => a.status === 'Draft').length
+  const draftCount = apps.filter((a) => a.status === 'Draft' && book.byId[a.accountId] && purchaseLapse(a, book.byId[a.accountId], book.opportunities) === null).length
 
   return (
     <div>
       <PageHeader
         title="Signals and newsletter"
-        subtitle="Every change to a hog, cattle or field-crop operation, tagged by region, state and county: ownership, leadership, capacity, integrator or grain marketing, animal and crop health, and regulation, with the grant programs a rule change opens. Plus significant weather at customer and prospect locations."
+        subtitle="Changes to hog, cattle and field-crop operations, by region, state and county."
+        actions={
+          <button
+            type="button"
+            onClick={() => setTab('newsletter')}
+            className={`inline-flex h-9 items-center gap-1.5 rounded-full px-4 text-[14px] transition-colors ${tab === 'newsletter' ? 'bg-accent text-on-accent' : 'bg-accent-soft text-ink hover:bg-accent-soft-2'}`}
+          >
+            <Newspaper size={14} aria-hidden /> Weekly newsletter
+          </button>
+        }
       />
       <Tabs
-        value={tab}
-        onChange={setTab}
+        value={tab === 'newsletter' ? ('' as Tab) : tab}
+        onChange={(t) => { setTab(t); setPage(0) }}
         tabs={[
-          { value: 'feed', label: 'Change feed' },
-          { value: 'weather', label: <>Weather impact{weatherCount !== undefined && <span className="tabular ml-1.5 opacity-60">{weatherCount}</span>}</> },
-          { value: 'grants', label: <>Grant applications{draftCount > 0 && <span className="tabular ml-1.5 opacity-60">{draftCount}</span>}</> },
-          { value: 'newsletter', label: 'Weekly newsletter' },
+          { value: 'org', label: 'Organization Change' },
+          { value: 'weather', label: <>Weather Impact{weatherCount !== undefined && <span className="tabular ml-1.5 opacity-60">{weatherCount}</span>}</> },
+          { value: 'regulatory', label: 'Regulatory Change' },
+          { value: 'grants', label: <>Grant Application{draftCount > 0 && <span className="tabular ml-1.5 opacity-60">{draftCount}</span>}</> },
         ]}
       />
       {tab === 'newsletter' ? (
@@ -416,24 +458,25 @@ export default function Signals() {
           </div>
           {tab === 'weather' && <WeatherImpactView impact={impact} geo={geo} />}
           {tab === 'grants' && <GrantApplicationsView geo={geo} />}
-          {tab === 'feed' && (
+          {(tab === 'org' || tab === 'regulatory') && (
             <>
               <div className="flex flex-wrap items-end gap-3">
-                <TextInput label="Search" value={q} onChange={setQ} placeholder="Headline or detail" className="w-full sm:w-64" />
-                <Select label="Type" value={type} onChange={setType} options={['All', ...TYPES]} />
-                <Select label="Operation" value={species} onChange={setSpecies} options={OPERATION_OPTIONS} />
-                <Select label="Period" value={days} onChange={setDays} options={[{ value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: '120', label: 'Last 120 days' }]} />
+                <TextInput label="Search" value={q} onChange={(v) => { setQ(v); setPage(0) }} placeholder="Headline or detail" className="w-full sm:w-64" />
+                {tab === 'org' && <Select label="Type" value={type === 'Regulatory' ? 'All' : type} onChange={(v) => { setType(v); setPage(0) }} options={['All', ...ORG_TYPES]} />}
+                <Select label="Operation" value={species} onChange={(v) => { setSpecies(v); setPage(0) }} options={OPERATION_OPTIONS} />
+                <Select label="Period" value={days} onChange={(v) => { setDays(v); setPage(0) }} options={PERIODS} />
                 <div className="flex flex-wrap items-center gap-1.5 pb-0.5">
                   {(['all', 'customers', 'prospects', 'market'] as const).map((s) => (
-                    <Pill key={s} active={scope === s} onClick={() => setScope(s)}>
+                    <Pill key={s} active={scope === s} onClick={() => { setScope(s); setPage(0) }}>
                       {{ all: 'Everything', customers: 'Customers', prospects: 'Prospects', market: 'Market-wide' }[s]}
                     </Pill>
                   ))}
                 </div>
               </div>
-              <Card pad={false} title={`${plural(feed.length, 'signal')}${geo.region !== 'All' || geo.state !== 'All' ? ` in ${geoLabel(geo)}` : ''}`}>
-                <ul className="divide-y divide-line">{feed.map((s) => <SignalRow key={s.id} s={s} />)}</ul>
+              <Card pad={false} title={`${plural(feed.length, tab === 'regulatory' ? 'regulatory change' : 'organization change')}${geo.region !== 'All' || geo.state !== 'All' ? ` in ${geoLabel(geo)}` : ''}`}>
+                <ul className="divide-y divide-line">{pageOf(feed, cur, FEED_PAGE).map((s) => <SignalRow key={s.id} s={s} />)}</ul>
                 {!feed.length && <div className="px-5 py-10 text-center text-[14px] text-muted">No signals match these filters. Widen the period, the area or clear the search.</div>}
+                <Pager page={cur} pages={feedPages} onPage={setPage} total={feed.length} size={FEED_PAGE} noun="signals" />
               </Card>
             </>
           )}

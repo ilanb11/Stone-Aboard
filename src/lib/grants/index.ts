@@ -1,6 +1,8 @@
-import type { Account, Signal, Species } from '../../types'
+import type { Account, Contract, Opportunity, Signal, Species } from '../../types'
 import { STATES } from '../../data/geo'
 import { num } from '../format'
+import { bandPrice } from '../pipeline'
+import { listMonthly } from '../pricing'
 import { seededGrants } from './seeded'
 import type { DeadlineRule, Grant, GrantSource, GrantTopic } from './types'
 
@@ -168,18 +170,98 @@ export function deadlineText(rule: DeadlineRule, today = new Date()): { date?: s
   return { date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), days, label: rule.label }
 }
 
-export const awardText = (g: Grant) => (g.award.costSharePct < 100 ? `Up to $${num(g.award.max)} · ${g.award.costSharePct}% cost share` : `Up to $${num(g.award.max)}`)
+// A tax credit pays nothing toward the purchase, so it gets no cap or cost share (its basis says how it's figured).
+export const awardText = (g: Grant) =>
+  g.kind === 'Tax credit' ? 'Tax credit, not a grant' : g.award.costSharePct < 100 ? `Up to $${num(g.award.max)} · ${g.award.costSharePct}% cost share` : `Up to $${num(g.award.max)}`
+
+// ---------- funding what the customer buys from us ----------
+
+/** An application is prepared only when a program covers at least this share of what the customer pays us. */
+export const COVERAGE_THRESHOLD = 0.5
+/** A renewal this close counts as a purchase the customer is about to make. */
+export const RENEWAL_HORIZON_DAYS = 150
+
+export interface Purchase {
+  kind: 'Renewal' | 'New deal' | 'Expansion'
+  opportunityId?: string
+  /** When the customer commits: the renewal date or the deal's expected close. */
+  when: string
+  lines: { productId: string; units: number; unitPrice: number }[]
+  /** First-year cost of the purchase, USD. */
+  annualCost: number
+}
+
+const OPEN = ['Negotiation', 'Demo', 'Prospect']
+
+/** What the account is buying from us next: its furthest open deal, else a renewal coming up. */
+export function purchaseFor(a: Account, opps: Opportunity[], contract: Contract | undefined, today = new Date()): Purchase | null {
+  if (a.status === 'Churned') return null
+  const open = opps.filter((o) => o.accountId === a.id && OPEN.includes(o.stage)).sort((x, y) => OPEN.indexOf(x.stage) - OPEN.indexOf(y.stage))[0]
+  if (open) return purchaseFromDeal(a, open)
+  if (a.status === 'Customer' && contract && a.subscriptions.length) {
+    const days = (new Date(contract.end).getTime() - today.getTime()) / 86400000
+    if (days > 0 && days <= RENEWAL_HORIZON_DAYS) {
+      const lines = a.subscriptions.map((x) => ({ productId: x.productId, units: x.units, unitPrice: x.unitPrice }))
+      return { kind: 'Renewal', when: contract.end, lines, annualCost: lines.reduce((s, l) => s + l.units * l.unitPrice, 0) * 12 }
+    }
+  }
+  return null
+}
+
+/** The purchase an open deal represents, priced at our normal band. */
+export function purchaseFromDeal(a: Account, o: Opportunity): Purchase {
+  if (o.type === 'Renewal' && a.subscriptions.length) {
+    const lines = a.subscriptions.map((x) => ({ productId: x.productId, units: x.units, unitPrice: x.unitPrice }))
+    return { kind: 'Renewal', opportunityId: o.id, when: o.closeDate, lines, annualCost: lines.reduce((s, l) => s + l.units * l.unitPrice, 0) * 12 }
+  }
+  const { lines } = bandPrice(a, o.products, o.type === 'Expansion' ? listMonthly(a) : 0)
+  const ls = lines.map((l) => ({ productId: l.productId, units: l.units, unitPrice: l.unitPrice }))
+  return { kind: o.type === 'Expansion' ? 'Expansion' : 'New deal', opportunityId: o.id, when: o.closeDate, lines: ls, annualCost: ls.reduce((s, l) => s + l.units * l.unitPrice, 0) * 12 }
+}
+
+export interface Coverage {
+  lines: { productId: string; units: number; annualCost: number; eligible: boolean }[]
+  eligibleCost: number
+  /** What the program would pay toward the purchase in the first year. */
+  funded: number
+  /** funded as a share of the purchase's first-year cost. */
+  coverage: number
+}
+
+export function coverageFor(g: Grant, p: Purchase): Coverage {
+  const lines = p.lines.map((l) => ({ productId: l.productId, units: l.units, annualCost: l.units * l.unitPrice * 12, eligible: g.funds.products.includes(l.productId) }))
+  const eligibleCost = lines.filter((l) => l.eligible).reduce((s, l) => s + l.annualCost, 0)
+  const funded = Math.min(g.award.max, (eligibleCost * g.funds.sharePct) / 100)
+  return { lines, eligibleCost, funded, coverage: p.annualCost ? funded / p.annualCost : 0 }
+}
 
 // ---------- per account ----------
 
 export interface AccountGrantMatch {
   grant: Grant
   changes: RegulatoryChange[]
+  coverage: Coverage
+}
+
+/**
+ * Programs that can pay for part of what the account is buying from us, best coverage
+ * first, with any regional rule change that makes the program timely. Tax credits are
+ * separate (see irs-rd).
+ */
+export function fundingFor(a: Account, p: Purchase, changes: RegulatoryChange[]): AccountGrantMatch[] {
+  const bought = new Set(p.lines.map((l) => l.productId))
+  const relevant = changes.filter((ch) => affects(ch, a))
+  return grantSource
+    .list()
+    .filter((g) => g.kind === 'Grant' && (g.level === 'Federal' || g.state === a.state) && g.funds.products.some((x) => bought.has(x)) && isEligible(g, a))
+    .map((g) => ({ grant: g, coverage: coverageFor(g, p), changes: relevant.filter((ch) => grantsForChange(ch).some((x) => x.id === g.id)) }))
+    .filter((m) => m.coverage.funded > 0)
+    .sort((x, y) => y.coverage.coverage - x.coverage.coverage)
 }
 
 /** Every program an account qualifies for through a regulatory change that covers it, best first. Changes are newest first. */
-export function grantMatchesForAccount(a: Account, changes: RegulatoryChange[]): AccountGrantMatch[] {
-  const byGrant = new Map<string, AccountGrantMatch>()
+export function grantMatchesForRules(a: Account, changes: RegulatoryChange[]): { grant: Grant; changes: RegulatoryChange[] }[] {
+  const byGrant = new Map<string, { grant: Grant; changes: RegulatoryChange[] }>()
   const topics = new Set<GrantTopic>()
   const seen = new Set<string>()
   for (const ch of changes) {
@@ -197,4 +279,9 @@ export function grantMatchesForAccount(a: Account, changes: RegulatoryChange[]):
   }
   const order = rankGrants([...byGrant.values()].map((m) => m.grant), a, [...topics]).map((g) => g.id)
   return order.map((id) => byGrant.get(id)!)
+}
+
+/** Programs for an account's next purchase from us (none when it isn't buying). */
+export function grantMatchesForAccount(a: Account, changes: RegulatoryChange[], purchase: Purchase | null): AccountGrantMatch[] {
+  return purchase ? fundingFor(a, purchase, changes) : []
 }

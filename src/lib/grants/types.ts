@@ -54,6 +54,14 @@ export interface Grant {
   award: { max: number; costSharePct: number; basis: string }
   deadline: DeadlineRule
   practices: Practice[]
+  /** Grant, or a tax credit to review with the customer's accountant. */
+  kind: 'Grant' | 'Tax credit'
+  /**
+   * What the program can pay for from a ThiboLiSoft purchase: eligible products and the
+   * share of their cost it covers. An application is prepared only when this covers at
+   * least half of what the customer pays us.
+   */
+  funds: { products: string[]; sharePct: number; note: string }
   /** Forms and documents an application needs. */
   attachments: string[]
   /** Where a person submits it. Herdbook never does. */

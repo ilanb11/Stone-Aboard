@@ -1,13 +1,15 @@
-import type { Account, GrantApplication, GrantPracticeLine, GrantSectionId } from '../types'
+import type { Account, GrantApplication, GrantFundedLine, GrantSectionId, Opportunity, Outreach } from '../types'
 import { OPERATION_LABEL } from '../types'
 import { STATES } from '../data/geo'
+import { PRODUCT } from '../data/products'
 import { num, sizeLabel } from './format'
 import { pickContact } from './outreach'
-import { checkEligibility, deadlineText, TOPIC_LABEL, type Grant, type GrantTopic, type RegulatoryChange } from './grants'
+import { checkEligibility, coverageFor, deadlineText, type Coverage, type Grant, type Purchase, type RegulatoryChange } from './grants'
 
-// Grant applications, pre-drafted from CRM data. Pure functions: the store decides
-// when to draft and keeps the results as drafts. Nothing here submits anything, and
-// there is no submission path: people file applications with the agency themselves.
+// Grant applications and tax-credit notes, pre-drafted from CRM data. Every one is tied
+// to something the customer is buying from us (an open deal or a renewal) and funds part
+// of it. Pure functions: the store decides when to draft and keeps the results. Nothing
+// here submits anything; people file applications with the agency themselves.
 
 /** One application per program and account, however many rule changes point at it. */
 export const grantApplicationId = (grantId: string, accountId: string) => `GA-${grantId}-${accountId}`
@@ -17,58 +19,52 @@ const long = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month:
 const stateName = (code: string) => STATES[code]?.name ?? code
 const article = (w: string) => (/^[aeiou]/i.test(w) ? 'an' : 'a')
 
-export const UNIT_LABEL: Record<GrantPracticeLine['unit'], [string, string]> = {
-  site: ['site', 'sites'],
-  barn: ['barn', 'barns'],
-  bin: ['grain bin', 'grain bins'],
-  '1k head': ['thousand head', 'thousand head'],
-  '100 acres': ['100 acres', '100-acre blocks'],
-  operation: ['plan', 'plans'],
-}
-export const unitWord = (u: GrantPracticeLine['unit'], n: number) => UNIT_LABEL[u][n === 1 ? 0 : 1]
-
-// A first application covers a first phase, not every site of a large system.
-const PHASE_CAP: Record<GrantPracticeLine['unit'], number> = { site: 2, barn: 12, bin: 12, '1k head': 25, '100 acres': 20, operation: 1 }
-
-function rawUnits(u: GrantPracticeLine['unit'], a: Account) {
-  switch (u) {
-    case 'site': return a.sites
-    case 'barn': case 'bin': return a.barns
-    case '1k head': return Math.ceil(a.headCount / 1000)
-    case '100 acres': return Math.ceil(a.acres / 100)
-    default: return 1
-  }
-}
-
-/**
- * Up to two practices that answer the rule change for this operation, sized from the CRM
- * record. Topics are in priority order, so a setback rule leads with odor control.
- */
-export function proposePractices(g: Grant, a: Account, topics: GrantTopic[]): GrantPracticeLine[] {
-  const fits = g.practices.filter((p) => p.operations.includes(a.species))
-  const rank = (p: (typeof fits)[number]) => topics.findIndex((t) => p.topics.includes(t))
-  const picked = fits.filter((p) => rank(p) >= 0).sort((x, y) => rank(x) - rank(y))
-  return (picked.length ? picked : fits).slice(0, 2).map((p) => ({ code: p.code, name: p.name, unit: p.unit, unitCost: p.unitCost, units: Math.max(1, Math.min(PHASE_CAP[p.unit], rawUnits(p.unit, a))) }))
-}
-
-export function draftGrantApplication(g: Grant, a: Account, changes: RegulatoryChange[], today = new Date()): GrantApplication {
-  const topics = [...new Set(changes.flatMap((c) => c.topics))]
+export function draftGrantApplication(g: Grant, a: Account, purchase: Purchase, changes: RegulatoryChange[], today = new Date()): GrantApplication {
+  const cov = coverageFor(g, purchase)
   return {
     id: grantApplicationId(g.id, a.id),
     grantId: g.id,
     accountId: a.id,
     signalIds: changes.map((c) => c.signal.id),
+    kind: g.kind,
+    purchase: { kind: purchase.kind, opportunityId: purchase.opportunityId, when: purchase.when, annualCost: purchase.annualCost },
+    lines: cov.lines.map((l) => ({ ...l, name: PRODUCT[l.productId]?.name ?? l.productId })),
     status: 'Draft',
     createdAt: today.toISOString(),
-    practices: proposePractices(g, a, topics),
   }
 }
 
-export function applicationBudget(app: Pick<GrantApplication, 'practices'>, g: Grant) {
-  const projectCost = app.practices.reduce((s, p) => s + p.units * p.unitCost, 0)
-  const share = Math.round(projectCost * (g.award.costSharePct / 100))
+/** The funding math for a stored application. */
+export function applicationBudget(app: Pick<GrantApplication, 'lines' | 'purchase'>, g: Grant) {
+  const eligibleCost = app.lines.filter((l) => l.eligible).reduce((s, l) => s + l.annualCost, 0)
+  const share = Math.round((eligibleCost * g.funds.sharePct) / 100)
   const requested = Math.min(share, g.award.max)
-  return { projectCost, costSharePct: g.award.costSharePct, requested, capped: share > g.award.max, producerShare: projectCost - requested }
+  const projectCost = app.purchase.annualCost
+  return { projectCost, eligibleCost, costSharePct: g.funds.sharePct, requested, capped: share > g.award.max, producerShare: Math.max(0, projectCost - requested), coverage: projectCost ? requested / projectCost : 0 }
+}
+
+/** Rough R&D credit for a tax note: 6 to 10% of the purchase. An estimate for the accountant, never money requested. */
+export const creditRange = (app: Pick<GrantApplication, 'purchase'>) => ({ low: app.purchase.annualCost * 0.06, high: app.purchase.annualCost * 0.1 })
+
+const andList = (xs: string[]) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`)
+
+/**
+ * What the coverage figure is a share of. An expansion is priced on the added products
+ * only, so its coverage is of the add-on, not the whole subscription.
+ */
+export function coveredPurchase(app: Pick<GrantApplication, 'purchase' | 'lines'>, you = false) {
+  if (app.purchase.kind === 'Expansion') return `the ${andList(app.lines.map((l) => l.name))} ${app.lines.length === 1 ? 'add-on' : 'add-ons'}`
+  if (app.purchase.kind === 'Renewal') return you ? 'your renewal year' : 'the renewal year'
+  return you ? 'your first year with us' : 'the first year with us'
+}
+
+/** Why a draft no longer funds a purchase (its deal was lost or shelved, or the account churned), or null while it does. */
+export function purchaseLapse(app: Pick<GrantApplication, 'purchase'>, a: Pick<Account, 'status'>, opps: Pick<Opportunity, 'id' | 'stage'>[]): string | null {
+  if (a.status === 'Churned') return 'Account churned'
+  const o = app.purchase.opportunityId ? opps.find((x) => x.id === app.purchase.opportunityId) : undefined
+  if (o?.stage === 'Closed Lost') return 'Deal lost'
+  if (o?.stage === 'On Ice') return 'Deal on ice'
+  return null
 }
 
 export interface GrantDraftContext {
@@ -82,91 +78,194 @@ export const SECTION_TITLES: Record<GrantSectionId, string> = {
   applicant: 'Applicant',
   operation: 'Operation',
   need: 'Why now',
-  project: 'Proposed practices',
+  project: 'Technology to be funded',
   budget: 'Budget',
   records: 'Records and verification',
+  activities: 'Activities that may qualify',
+  costs: 'Costs and estimated credit',
+  accountant: 'Questions for your accountant',
 }
 export const SECTION_ORDER: GrantSectionId[] = ['applicant', 'operation', 'need', 'project', 'budget', 'records']
+export const TAX_SECTION_ORDER: GrantSectionId[] = ['applicant', 'activities', 'costs', 'records', 'accountant']
+export const sectionsFor = (app: Pick<GrantApplication, 'kind'>) => (app.kind === 'Tax credit' ? TAX_SECTION_ORDER : SECTION_ORDER)
 
 // How each ThiboLiSoft product helps document the application.
 const RECORDS: Record<string, string> = {
   tracelink: 'TraceLink Compliance keeps the audit trail the program asks for (manure application, treatment and movement records) and exports it for the application and later spot checks.',
   herdtrack: 'HerdTrack Core inventory and closeouts document animal numbers for each site.',
-  barnsense: 'BarnSense IoT ventilation and temperature logs support odor-control and animal-care practices.',
+  barnsense: 'BarnSense IoT ventilation and fan logs show energy use before and after, which the program asks for.',
+  binsense: 'BinSense aeration logs show fan hours saved.',
   fieldtrack: 'FieldTrack field records and yield maps document acres and practice locations.',
   agronomyview: 'AgronomyView nitrogen recommendations and satellite imagery document nutrient rates and cover crop establishment.',
   pastureview: 'PastureView grazing records support a prescribed grazing plan.',
   feedopt: 'FeedOptimizer ration records support nutrient balance calculations for manure.',
 }
 
-export function generatedSections(ctx: GrantDraftContext): Record<GrantSectionId, string> {
+// Trials each product makes measurable (for the R&D credit worksheet).
+const TRIALS: Record<string, string> = {
+  feedopt: 'Ration trials: testing new diets or feed additives against a control group, measured on gain and feed efficiency.',
+  barnsense: 'Ventilation trials: testing setpoints or fan staging to cut heat stress and energy use, measured barn by barn.',
+  agronomyview: 'Nitrogen-rate and variable-rate trials: strip trials against the standard rate, measured on yield maps.',
+  fieldtrack: 'Seeding-rate and hybrid trials across fields, with yield maps as the measurement.',
+  healthwatch: 'Treatment protocol trials: comparing vaccination or treatment programs on mortality and cost.',
+  herdtrack: 'Production trials (weaning age, stocking density) tracked through closeouts.',
+  pastureview: 'Grazing rotation trials measured on forage and weight gain.',
+  binsense: 'Aeration strategy trials measured on grain condition and fan hours.',
+  advisory: 'Structured trials designed with our advisors.',
+}
+
+const purchaseText = (app: GrantApplication, a: Account) =>
+  app.purchase.kind === 'Renewal'
+    ? `${a.name} renews its ThiboLiSoft subscription on ${long(app.purchase.when)}`
+    : app.purchase.kind === 'Expansion'
+      ? `${a.name} is adding to its ThiboLiSoft subscription, expected ${long(app.purchase.when)}`
+      : `${a.name} is starting a ThiboLiSoft subscription, expected ${long(app.purchase.when)}`
+
+export function generatedSections(ctx: GrantDraftContext): Partial<Record<GrantSectionId, string>> {
   const { app, grant: g, account: a, changes } = ctx
   const owner = pickContact(a, ['Owner', 'GM', 'CFO'])
   const budget = applicationBudget(app, g)
   const partner = a.integrator ? `${a.species === 'Hog' ? 'Integrator' : a.species === 'Cattle' ? 'Packer' : 'Grain marketing'}: ${a.integrator}.` : ''
   const crops = a.species === 'Grain' && a.crops?.length ? `, growing ${a.crops.join(', ').toLowerCase()}` : ''
   const facilities = a.barns ? ` and ${a.barns} ${a.species === 'Grain' ? (a.barns === 1 ? 'grain bin' : 'grain bins') : a.barns === 1 ? 'barn' : 'barns'}` : ''
-  const records = a.subscriptions.map((s) => RECORDS[s.productId]).filter(Boolean)
-  const capped = app.practices.some((p) => p.units >= PHASE_CAP[p.unit] && p.unit !== 'operation')
+  const applicant = [
+    `Applicant: ${a.name}`,
+    `Ownership: ${a.ownership}${a.parentCompany ? `, owned by ${a.parentCompany}` : ''}`,
+    `Primary contact: ${owner.name}, ${owner.title} (${owner.email})`,
+    `Location: ${a.county} County, ${stateName(a.state)}`,
+    g.kind === 'Tax credit' ? 'Accountant: [add name and firm]' : 'FSA farm and tract numbers: [add before submitting]',
+  ].join('\n')
+  const records = app.lines.map((l) => RECORDS[l.productId]).filter(Boolean)
+  const recordsText = records.length ? records.join('\n') : 'ThiboLiSoft keeps the records the program asks for and exports them for the application.'
+
+  if (g.kind === 'Tax credit') {
+    const trials = [...new Set(app.lines.map((l) => TRIALS[l.productId]).filter(Boolean))]
+    const { low, high } = creditRange(app)
+    return {
+      applicant,
+      activities: [
+        `${purchaseText(app, a)}. If the operation uses it to run structured trials, the work may count as qualified research:`,
+        ...trials.map((t) => `• ${t}`),
+        '',
+        'Routine use (day-to-day monitoring, standard reports) does not qualify on its own; the trial has to test something uncertain and be documented as it happens.',
+      ].join('\n'),
+      costs: [
+        `Annual ThiboLiSoft cost: ${usd(app.purchase.annualCost)}. The share used for trials, plus staff time on trial design and measurement, may count as qualified research expenses.`,
+        `Rough credit if most of the subscription supports trials: ${usd(low)} to ${usd(high)} a year (6 to 10% of qualified expenses under the simplified method). Staff wages on trials usually matter more than the software.`,
+        'A qualified small business (under $5 million in gross receipts) may be able to apply the credit against payroll taxes instead of income tax.',
+      ].join('\n'),
+      records: recordsText,
+      accountant: [
+        'Do our planned trials meet the four-part test for qualified research?',
+        'Which costs count: staff time, the subscription share used for trials, trial supplies?',
+        `Is there a ${stateName(a.state)} R&D credit on top of the federal one?`,
+        'Should the software and sensors be expensed under Section 179 instead of, or as well as, the R&D credit?',
+        'Should we elect the payroll tax offset as a qualified small business?',
+      ]
+        .map((q) => `• ${q}`)
+        .join('\n'),
+    }
+  }
+
   return {
-    applicant: [
-      `Applicant: ${a.name}`,
-      `Ownership: ${a.ownership}${a.parentCompany ? `, owned by ${a.parentCompany}` : ''}`,
-      `Primary contact: ${owner.name}, ${owner.title} (${owner.email})`,
-      `Location: ${a.county} County, ${stateName(a.state)}`,
-      'FSA farm and tract numbers: [add before submitting]',
-    ].join('\n'),
+    applicant,
     operation: `${a.name} is ${article(a.segment)} ${a.segment.toLowerCase()} ${OPERATION_LABEL[a.species].toLowerCase()} operation in ${a.county} County, ${stateName(a.state)}, founded in ${a.yearFounded}. It runs ${sizeLabel(a)}${crops} on ${a.sites} ${a.sites === 1 ? 'site' : 'sites'}${facilities}, with ${num(a.acres)} acres and about ${num(a.employees)} ${a.employees === 1 ? 'employee' : 'employees'}. ${partner}`.trim(),
-    need: changes
-      .map((c) => `On ${long(c.signal.date)}: ${c.signal.headline}. ${c.signal.detail}\n${c.why(a)}`)
-      .join('\n\n'),
+    need: [`${purchaseText(app, a)}. ${g.funds.note}`, ...changes.map((c) => `On ${long(c.signal.date)}: ${c.signal.headline}. ${c.why(a)}`)].join('\n\n'),
     project: [
-      ...app.practices.map((p) => `• ${p.name}${p.code ? ` (NRCS practice ${p.code})` : ''}: ${num(p.units)} ${unitWord(p.unit, p.units)} at ${usd(p.unitCost)} each, ${usd(p.units * p.unitCost)}`),
+      ...app.lines.map((l) => `• ${l.name}: ${num(l.units)} ${l.units === 1 ? 'unit' : 'units'}, ${usd(l.annualCost)} a year${l.eligible ? '' : ' (not eligible under this program; paid by the applicant)'}`),
       '',
-      `These practices address ${[...new Set(changes.flatMap((c) => c.topics))].map((t) => TOPIC_LABEL[t]).join(', ')}.${capped ? ' This application covers a first phase; later sites can follow in a second contract.' : ''} Installation within 12 months of contract approval.`,
+      'Installation and onboarding within 60 days of award.',
     ].join('\n'),
     budget: [
-      `Estimated project cost: ${usd(budget.projectCost)}`,
-      `Program share: ${budget.costSharePct}%. ${g.award.basis}.`,
-      `Amount requested: ${usd(budget.requested)}${budget.capped ? ' (capped at the program maximum)' : ''}`,
+      `First-year cost of the ThiboLiSoft purchase: ${usd(budget.projectCost)}`,
+      `Eligible under this program: ${usd(budget.eligibleCost)}`,
+      `Program share: ${budget.costSharePct}% of eligible cost. ${g.award.basis}.`,
+      `Amount requested: ${usd(budget.requested)}${budget.capped ? ' (capped at the program maximum)' : ''}, ${Math.round(budget.coverage * 100)}% of the first-year cost`,
       `Applicant share: ${usd(budget.producerShare)}`,
     ].join('\n'),
-    records: records.length
-      ? records.join('\n')
-      : `The applicant will supply its own records. ThiboLiSoft ${a.species === 'Grain' ? 'FieldTrack' : 'TraceLink Compliance'} can keep the practice records the program asks for.`,
+    records: recordsText,
   }
 }
 
-export const sectionText = (ctx: GrantDraftContext, id: GrantSectionId, generated = generatedSections(ctx)) => ctx.app.edits?.[id] ?? generated[id]
+export const sectionText = (ctx: GrantDraftContext, id: GrantSectionId, generated = generatedSections(ctx)) => ctx.app.edits?.[id] ?? generated[id] ?? ''
 
 /** What a person still has to supply before this can be filed. */
 export function missingItems(ctx: GrantDraftContext): string[] {
-  return [
-    ...checkEligibility(ctx.grant, ctx.account)
-      .filter((c) => c.status === 'To confirm')
-      .map((c) => c.label),
-    ...(ctx.grant.eligibility.some((c) => c.kind === 'confirm' && /Farm Service Agency/.test(c.label)) ? [] : ['Farm Service Agency farm and tract numbers']),
-    'Contractor quotes for each practice',
-  ]
+  const confirm = checkEligibility(ctx.grant, ctx.account)
+    .filter((c) => c.status === 'To confirm')
+    .map((c) => c.label)
+  if (ctx.grant.kind === 'Tax credit') return [...confirm, 'Trial plan for the year, written before the trials start']
+  return [...confirm, ...(ctx.grant.eligibility.some((c) => c.kind === 'confirm' && /Farm Service Agency/.test(c.label)) ? [] : ['Farm Service Agency farm and tract numbers']), 'Signed ThiboLiSoft quote or order form for the funded products']
 }
 
-/** The full application as plain text, for review, copying or export. */
+/** The full application (or accountant worksheet) as plain text, for review, copying or export. */
 export function renderGrantApplication(ctx: GrantDraftContext, rep: string): string {
   const { grant: g, account: a } = ctx
   const gen = generatedSections(ctx)
   const dl = deadlineText(g.deadline)
+  const tax = g.kind === 'Tax credit'
   return [
     `${g.name} (${g.shortName})`,
     `${g.agency}`,
-    `Application draft for ${a.name}, prepared by Herdbook for ${rep} on ${long(ctx.app.createdAt)}. Not submitted.`,
-    `Deadline: ${dl.date ? `${dl.date} (${dl.label})` : dl.label}. Submit through: ${g.applyVia}.`,
+    tax ? `Worksheet for ${a.name} to review with their accountant, prepared by Herdbook for ${rep} on ${long(ctx.app.createdAt)}. Not tax advice.` : `Application draft for ${a.name}, prepared by Herdbook for ${rep} on ${long(ctx.app.createdAt)}. Not submitted.`,
+    `${tax ? 'Timing' : 'Deadline'}: ${dl.date ? `${dl.date} (${dl.label})` : dl.label}. ${tax ? 'Claimed through' : 'Submit through'}: ${g.applyVia}.`,
     '',
-    ...SECTION_ORDER.flatMap((id) => [SECTION_TITLES[id], sectionText(ctx, id, gen), '']),
-    'Attachments',
+    ...sectionsFor(ctx.app).flatMap((id) => [SECTION_TITLES[id], sectionText(ctx, id, gen), '']),
+    tax ? 'Supporting documents' : 'Attachments',
     ...g.attachments.map((x) => `• ${x}`),
     '',
-    'Still needed before submitting',
+    'Still needed',
     ...missingItems(ctx).map((x) => `• ${x}`),
   ].join('\n')
 }
 
+/** The customer email that goes with an application or a tax-credit note. Always a draft. */
+export function draftGrantEmail(ctx: GrantDraftContext): Omit<Outreach, 'id' | 'createdAt' | 'status'> {
+  const { grant: g, account: a, app } = ctx
+  const c = pickContact(a, g.kind === 'Tax credit' ? ['CFO', 'Owner', 'GM'] : ['Owner', 'GM', 'CFO'])
+  const first = c.name.split(' ')[0]
+  const b = applicationBudget(app, g)
+  const pct = Math.round(b.coverage * 100)
+  const body =
+    g.kind === 'Tax credit'
+      ? [
+          `Hi ${first},`,
+          '',
+          'Something to raise with your accountant: if you use ThiboLiSoft to run structured trials (rations, ventilation settings or seeding rates), part of the cost and your team’s time on those trials may qualify for the federal R&D tax credit. Operations like yours often don’t claim it.',
+          '',
+          'I’ve put together a one-page worksheet with the trials our tools support, the costs that may count and the questions to ask. Happy to send it to your accountant directly.',
+          '',
+          'Best,',
+          a.rep,
+          'ThiboLiSoft',
+        ].join('\n')
+      : [
+          `Hi ${first},`,
+          '',
+          `Good news on cost: ${g.name} (${g.shortName}) can pay for about ${pct}% of ${coveredPurchase(app, true)}, roughly ${usd(b.requested)} of ${usd(b.projectCost)}. ${g.funds.note}`,
+          '',
+          `I’ve pre-filled the application from what we know about ${a.name}. It needs a few details only you have (your FSA farm number, for one) before it goes to ${g.applyVia.charAt(0).toLowerCase() + g.applyVia.slice(1)}. Can we take 15 minutes this week to finish it together?`,
+          '',
+          'Best,',
+          a.rep,
+          'ThiboLiSoft',
+        ].join('\n')
+  return {
+    accountId: a.id,
+    // The program name in the trigger ties the email to its application (see isGrantEmailFor).
+    trigger: g.kind === 'Tax credit' ? `${g.shortName} note for the accountant` : `Grant application (${g.shortName}, ${pct}% of ${coveredPurchase(app)})`,
+    playbook: g.kind === 'Tax credit' ? 'tax-credit' : 'grant-intro',
+    contactName: c.name,
+    contactEmail: c.email,
+    subject: g.kind === 'Tax credit' ? `${a.name}: an R&D tax credit to check with your accountant` : `${a.name}: ${g.shortName} can cover ${pct}% of ${coveredPurchase(app, true)}`,
+    body,
+    auto: false,
+  }
+}
+
+/** Whether an outreach email is this application's customer email: same account and playbook, naming the program, drafted since. */
+export function isGrantEmailFor(o: Pick<Outreach, 'accountId' | 'playbook' | 'trigger' | 'subject' | 'createdAt'>, app: Pick<GrantApplication, 'accountId' | 'createdAt'>, g: Grant) {
+  return o.accountId === app.accountId && o.playbook === (g.kind === 'Tax credit' ? 'tax-credit' : 'grant-intro') && o.createdAt >= app.createdAt && `${o.trigger}\n${o.subject}`.includes(g.shortName)
+}
+
+export type { Coverage, GrantFundedLine }

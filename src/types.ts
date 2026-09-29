@@ -34,6 +34,8 @@ export interface Contact {
   role: 'Owner' | 'GM' | 'CFO' | 'Operations' | 'Barn Manager' | 'Veterinarian' | 'Nutritionist' | 'Agronomist'
   email: string
   since: string
+  /** Other addresses this person writes from (a personal address), learned from tracked email. */
+  altEmails?: string[]
 }
 
 export interface Subscription {
@@ -80,7 +82,7 @@ export interface Contract {
   accountId: string
   template: string
   /** Draft: prepared by Lucas the Hog, not yet approved or sent to the customer. */
-  status: 'Draft' | 'Active' | 'In Negotiation' | 'Expired'
+  status: 'Draft' | 'Active' | 'In Negotiation' | 'Expired' | 'Void'
   start: string
   end: string
   termMonths: number
@@ -123,6 +125,10 @@ export interface Redline {
   original: string
   proposed: string
   customerNote: string
+  /** Where the ask came from when email tracking added it. */
+  source?: { messageId: string; from: string; at: string }
+  /** The customer agreed our position on this clause (read from their email and confirmed by a rep). */
+  agreed?: { at: string; value?: string; quote: string; messageId: string; by: string }
 }
 
 /** The one source of truth for pipeline stages, in board order. */
@@ -187,7 +193,16 @@ export interface GrantPracticeLine {
   unit: 'site' | 'barn' | 'bin' | '1k head' | '100 acres' | 'operation'
   unitCost: number
 }
-export type GrantSectionId = 'applicant' | 'operation' | 'need' | 'project' | 'budget' | 'records'
+export type GrantSectionId = 'applicant' | 'operation' | 'need' | 'project' | 'budget' | 'records' | 'activities' | 'costs' | 'accountant'
+/** One product of the ThiboLiSoft purchase an application funds. */
+export interface GrantFundedLine {
+  productId: string
+  name: string
+  units: number
+  annualCost: number
+  /** Whether the program can pay for this product. */
+  eligible: boolean
+}
 /** A grant application Herdbook pre-drafted for an account. Only people submit applications. */
 export interface GrantApplication {
   id: string
@@ -195,11 +210,15 @@ export interface GrantApplication {
   accountId: string
   /** The regulatory changes that prompted it. */
   signalIds: string[]
+  /** A grant application, or a tax-credit note for the customer's accountant. */
+  kind: 'Grant' | 'Tax credit'
+  /** What the customer is buying from us that the program helps pay for. */
+  purchase: { kind: 'Renewal' | 'New deal' | 'Expansion'; opportunityId?: string; when: string; annualCost: number }
+  lines: GrantFundedLine[]
   status: 'Draft' | 'Reviewed'
   createdAt: string
   updatedAt?: string
   reviewedAt?: string
-  practices: GrantPracticeLine[]
   /** Hand edits to generated sections. Sections without an edit follow the CRM data. */
   edits?: Partial<Record<GrantSectionId, string>>
 }
@@ -224,6 +243,8 @@ export interface Outreach {
   contractId?: string
   /** The invoice this price-change email goes out with (Pricing rank drafts). */
   invoiceId?: string
+  /** The sales trip this meeting request was drafted for (trip planner). */
+  tripId?: string
 }
 
 export interface InvoiceLine {
@@ -255,10 +276,14 @@ export interface Invoice {
   createdAt: string
   updatedAt?: string
   sentAt?: string
+  /** When the new prices took effect on the account's subscription (at the issue date, after it was sent). */
+  appliedAt?: string
   /** The email as last generated. While the email still matches, it follows pricing model changes. */
   emailGenerated: { subject: string; body: string }
   /** Set when the pricing model no longer calls for this change. */
   stale?: boolean
+  /** Which tool drafted it: the Pricing rank (follows model changes) or a band-check notice (left alone). */
+  source?: 'rank' | 'band'
 }
 
 export interface Activity {

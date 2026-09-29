@@ -99,6 +99,8 @@ export default function App() {
   // New regional rule changes get their grant applications pre-drafted once (never submitted).
   useEffect(() => {
     useCrm.getState().runGrantTrigger()
+    // Sent price notices take effect on the subscription at their issue date.
+    useCrm.getState().applyDuePriceChanges()
   }, [])
 
   return (

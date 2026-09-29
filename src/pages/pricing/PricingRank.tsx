@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { FileText, RotateCcw } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileText, RotateCcw } from 'lucide-react'
 import type { Species } from '../../types'
 import { OPERATION_LABEL, OPERATION_OPTIONS } from '../../types'
 import { TEAM } from '../../data/generate'
 import { PRODUCTS, baseListPrice, unitLabel } from '../../data/products'
 import { useBook } from '../../lib/useData'
 import { SEGMENT_FACTORS, useCrm } from '../../store'
-import { Button, Card, Notice, Pill, Select, Stat, StatusBadge, TextInput, inputClass } from '../../components/ui'
+import { Button, Card, Notice, Pill, Select, StatusBadge, TextInput, inputClass } from '../../components/ui'
+import { Pager } from '../../components/Pager'
 import { money, num, shortDate } from '../../lib/format'
-import { UNIT_WORD, operationTarget, rankCustomers, segmentKey, targetFor, unitFor, unitMoney, type GrainBasis, type UnitRank } from '../../lib/unitPricing'
+import { MAX_RENEWAL_INCREASE, UNIT_WORD, operationTarget, rankCustomers, segmentKey, targetFor, unitFor, unitMoney, type GrainBasis, type UnitRank } from '../../lib/unitPricing'
 
 const SPECIES: Species[] = ['Hog', 'Cattle', 'Grain']
-const PAGE = 50
+const PAGE = 15
+const DAY = 86400000
 const median = (xs: number[]) => {
   const s = [...xs].sort((a, b) => a - b)
   return s.length ? s[Math.floor(s.length / 2)] : 0
@@ -199,7 +201,10 @@ export function PricingRank() {
   const [status, setStatus] = useState<'All' | UnitRank['status']>('All')
   const [rep, setRep] = useState('All')
   const [q, setQ] = useState('')
-  const [sort, setSort] = useState<'rank' | 'uplift'>('rank')
+  const [sort, setSort] = useState<'notice' | 'rank' | 'uplift'>('notice')
+  // Pricing opportunities: renewals in the next 30, 60 or 90 days, most imminent notice first.
+  const [windowDays, setWindowDays] = useState('90')
+  const [modelOpen, setModelOpen] = useState(false)
   const [page, setPage] = useState(0)
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [note, setNote] = useState<string | null>(null)
@@ -211,15 +216,31 @@ export function PricingRank() {
     for (const i of invoices) if (i.status !== 'Void' && (!m.has(i.accountId) || i.status === 'Draft')) m.set(i.accountId, i)
     return m
   }, [invoices])
-  const shown = ranks
+  const now = Date.now()
+  // The window is on the renewal that's up (the current term end), even when its notice was missed.
+  const inWindow = (r: UnitRank) => {
+    if (windowDays === 'all') return true
+    if (!r.renewal) return false
+    const d = new Date(r.renewal.termEnd).getTime() - now
+    return d >= 0 && d <= Number(windowDays) * DAY
+  }
+  // A contract past its notice date without auto-renew sorts first (act now); a missed auto-renewal sorts
+  // last, as its change waits for the renewal after.
+  const noticeT = (r: UnitRank) => (r.renewal ? new Date(r.renewal.noticeBy).getTime() : Infinity)
+  const windowed = ranks.filter(inWindow)
+  const shown = windowed
     .filter((r) => (op === 'All' || r.account.species === op) && (status === 'All' || r.status === status) && (rep === 'All' || r.account.rep === rep) && (!q || r.account.name.toLowerCase().includes(q.toLowerCase())))
-    .sort((x, y) => (sort === 'uplift' ? y.upliftArr - x.upliftArr || x.rank - y.rank : x.rank - y.rank))
-  const eligible = (r: UnitRank) => r.upliftArr >= 1 && !!r.renewal
-  const under = ranks.filter((r) => r.status === 'Under target')
-  const over = ranks.filter((r) => r.status === 'Over target')
+    .sort((x, y) => (sort === 'uplift' ? y.upliftArr - x.upliftArr || x.rank - y.rank : sort === 'notice' ? noticeT(x) - noticeT(y) || x.rank - y.rank : x.rank - y.rank))
+  // A sent change still waiting for its effective date blocks another draft for that account.
+  const eligible = (r: UnitRank) => r.upliftArr >= 1 && !!r.renewal && !(draftFor.get(r.account.id)?.status === 'Sent' && !draftFor.get(r.account.id)?.appliedAt)
+  // Uplift in a window only counts renewals that can still take the change.
+  const under = windowed.filter((r) => r.status === 'Under target' && (windowDays === 'all' || !r.renewal?.rolled))
+  const over = windowed.filter((r) => r.status === 'Over target')
   const pickedRanks = ranks.filter((r) => picked.has(r.account.id))
-  const pageRows = shown.slice(page * PAGE, page * PAGE + PAGE)
   const pages = Math.max(1, Math.ceil(shown.length / PAGE))
+  // Target and list-price edits change the list without touching the filters, so keep the page in range.
+  const cur = Math.min(page, pages - 1)
+  const pageRows = shown.slice(cur * PAGE, cur * PAGE + PAGE)
   const togglePick = (id: string, on: boolean) =>
     setPicked((prev) => {
       const next = new Set(prev)
@@ -233,7 +254,7 @@ export function PricingRank() {
   const draft = () => {
     const ids = pickedRanks.filter(eligible).map((r) => r.account.id)
     const c = draftPriceChanges(ids)
-    const parts = [c.created && `${c.created} new`, c.updated && `${c.updated} updated`, c.kept && `${c.kept} kept (email edited by hand)`, c.skipped && `${c.skipped} skipped (no change to make)`].filter(Boolean)
+    const parts = [c.created && `${c.created} new`, c.updated && `${c.updated} updated`, c.kept && `${c.kept} kept (edited by hand or a band-check notice)`, c.skipped && `${c.skipped} skipped (no change to make)`].filter(Boolean)
     setNote(`Price-change drafts: ${parts.join(', ')}. Each is an email plus an invoice, waiting in the approval queue. Nothing has been sent.`)
     setPicked(new Set())
   }
@@ -241,9 +262,21 @@ export function PricingRank() {
 
   return (
     <div className="flex flex-col gap-5">
-      <Card title="Target price per unit" action={<Button size="sm" variant="ghost" onClick={resetPricingModel}><RotateCcw size={12} /> Reset targets</Button>}>
+      <section className="rounded-[var(--radius-card)] border border-line bg-surface">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3">
+          <button type="button" className="flex min-w-0 items-center gap-2 text-left" aria-expanded={modelOpen} onClick={() => setModelOpen(!modelOpen)}>
+            {modelOpen ? <ChevronDown size={16} className="shrink-0 text-ink" aria-hidden /> : <ChevronRight size={16} className="shrink-0 text-ink" aria-hidden />}
+            <span className="text-[15px] font-medium text-ink">Target price per unit</span>
+            <span className="tabular truncate text-[13px] text-muted">
+              Hog {unitMoney(model.hog)} · Cattle {unitMoney(model.cattle)} · Field crops {unitMoney(model.grainBasis === 'acre' ? model.grainAcre : model.grainBushel)} per {model.grainBasis} · per year
+            </span>
+          </button>
+          {modelOpen && <Button size="sm" variant="ghost" onClick={resetPricingModel}><RotateCcw size={12} /> Reset targets</Button>}
+        </div>
+        {modelOpen && (
+        <div className="border-t border-line px-5 pb-5 pt-4">
         <p className="mb-4 max-w-[80ch] text-[14px] leading-relaxed text-ink-2">
-          What a customer should pay a year for each hog, head of cattle, or acre or bushel of grain. Every customer is ranked by how far its current price sits from target, and under-target accounts move to target at renewal, never above the price list. Change a target and the ranking, uplift and any open drafts update right away.
+          What a customer should pay a year for each hog, head of cattle, or acre or bushel of grain. Each account’s own target follows the products and sites it subscribes to, so a customer with one module isn’t compared with one running the full suite. Under-target accounts move toward target at renewal, by at most {Math.round(MAX_RENEWAL_INCREASE * 100)}% and not above the price list. Change a target and the ranking, uplift and any open drafts update right away.
         </p>
         <div className="grid gap-3 lg:grid-cols-3">
           {SPECIES.map((s) => (
@@ -255,28 +288,47 @@ export function PricingRank() {
           <span>
             Renewal price stops at list price
             <span className="block text-[13px] text-ink-2">
-              On: under-target accounts move toward target, up to the price list. Off: they move all the way to target, even above list, which can mean large increases for big operations that pay little per animal today.
+              On: under-target accounts move toward target, up to the price list. Off: they can go above list, still by at most {Math.round(MAX_RENEWAL_INCREASE * 100)}% per renewal.
             </span>
           </span>
         </label>
-      </Card>
+        </div>
+        )}
+      </section>
 
       <PriceListCard />
 
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Under target" value={num(under.length)} sub={`${money(under.reduce((s, r) => s + r.upliftArr, 0))} ARR uplift at renewal, of ${money(under.reduce((s, r) => s + r.toTargetArr, 0))} to reach target`} highlight />
-        <Stat label="At target" value={num(ranks.filter((r) => r.status === 'At target').length)} sub="Within 5% of target" />
-        <Stat label="Over target" value={num(over.length)} sub={`${money(over.reduce((s, r) => s + (r.currentArr - r.targetArr), 0))} ARR above target, held at renewal`} />
-        <Stat label="Capped at list price" value={num(under.filter((r) => r.cappedAtList).length)} sub={model.capAtList !== false ? 'Target is above list, so renewal stops at list. Raise list prices to close more of the gap.' : 'List cap is off: renewals go to target'} />
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <div className="rounded-[var(--radius-card)] bg-lime px-4 py-3 text-on-lime">
+          <div className="text-[13px] text-black/70">{windowDays === 'all' ? 'All customers' : `Renewing in the next ${windowDays} days`}</div>
+          <div className="figure mt-1 text-[30px] leading-none">{money(under.reduce((s, r) => s + r.upliftArr, 0))}</div>
+          <div className="mt-1 text-[12px] text-black/65">uplift at renewal from {num(under.length)} under-target {under.length === 1 ? 'account' : 'accounts'}</div>
+        </div>
+        <div className="rounded-[var(--radius-card)] border border-line bg-surface px-4 py-3">
+          <div className="text-[13px] text-ink-2">Renewals in the window</div>
+          <div className="figure mt-1 text-[30px] leading-none text-ink">{num(windowed.length)}</div>
+          <div className="mt-1 text-[12px] text-muted">{num(windowed.filter((r) => r.status === 'At target').length)} at target (within 5%)</div>
+        </div>
+        <div className="rounded-[var(--radius-card)] border border-line bg-surface px-4 py-3">
+          <div className="text-[13px] text-ink-2">Over target</div>
+          <div className="figure mt-1 text-[30px] leading-none text-ink">{num(over.length)}</div>
+          <div className="mt-1 text-[12px] text-muted">{money(over.reduce((s, r) => s + (r.currentArr - r.targetArr), 0))} above target, held at renewal</div>
+        </div>
+        <div className="rounded-[var(--radius-card)] border border-line bg-surface px-4 py-3">
+          <div className="text-[13px] text-ink-2">Stopped by the list price</div>
+          <div className="figure mt-1 text-[30px] leading-none text-ink">{num(under.filter((r) => r.cappedAtList).length)}</div>
+          <div className="mt-1 text-[12px] text-muted">{model.capAtList !== false ? 'Raise list prices to close more of the gap' : 'List cap is off'}</div>
+        </div>
       </div>
 
-      <Card pad={false} title={`Pricing rank · ${num(shown.length)} ${shown.length === 1 ? 'customer' : 'customers'}`}>
-        <div className="grid grid-cols-2 gap-3 px-5 pb-4 pt-2 md:grid-cols-5">
+      <Card pad={false} title={`Pricing opportunities · ${num(shown.length)} ${shown.length === 1 ? 'renewal' : 'renewals'}`}>
+        <div className="grid grid-cols-2 gap-3 px-5 pb-4 pt-2 md:grid-cols-6">
+          <Select label="Renewing" value={windowDays} onChange={(v) => { setWindowDays(v); setPage(0) }} options={[{ value: '30', label: 'Next 30 days' }, { value: '60', label: 'Next 60 days' }, { value: '90', label: 'Next 90 days' }, { value: 'all', label: 'All customers' }]} />
           <TextInput label="Customer" value={q} onChange={(v) => { setQ(v); setPage(0) }} placeholder="Search" />
           <Select label="Operation" value={op} onChange={(v) => { setOp(v); setPage(0) }} options={OPERATION_OPTIONS} />
           <Select label="Status" value={status} onChange={(v) => { setStatus(v); setPage(0) }} options={['All', 'Under target', 'At target', 'Over target']} />
           <Select label="Sales rep" value={rep} onChange={(v) => { setRep(v); setPage(0) }} options={['All', ...TEAM]} />
-          <Select label="Sort" value={sort} onChange={setSort} options={[{ value: 'rank', label: 'Rank (under to over)' }, { value: 'uplift', label: 'Largest uplift' }]} />
+          <Select label="Sort" value={sort} onChange={setSort} options={[{ value: 'notice', label: 'Notice due soonest' }, { value: 'rank', label: 'Furthest under target' }, { value: 'uplift', label: 'Largest uplift' }]} />
         </div>
         <div className="flex flex-wrap items-center gap-3 border-t border-line bg-accent-soft/60 px-5 py-3 text-[13px]">
           <span className="text-ink">
@@ -360,11 +412,24 @@ export function PricingRank() {
                       {r.toTargetArr >= 1 && <span className="block text-[12px] text-muted">{money(r.toTargetArr)} to reach target</span>}
                     </td>
                     <td className={`${td} min-w-[100px] text-[13px]`}>
-                      {r.renewal ? (
+                      {r.renewal?.rolled ? (
+                        <>
+                          <span className="whitespace-nowrap text-ink">{shortDate(r.renewal.termEnd)}</span>
+                          <div>
+                            <StatusBadge tone="critical" title={`The notice date has passed, so this renewal keeps current pricing. A change here takes effect at the renewal after it, ${shortDate(r.renewal.date)}.`}>Notice missed</StatusBadge>
+                          </div>
+                          <div className="text-[12px] text-muted">Change from {shortDate(r.renewal.date)}</div>
+                        </>
+                      ) : r.renewal ? (
                         <>
                           <span className="whitespace-nowrap text-ink">{shortDate(r.renewal.date)}</span>
-                          <div className="text-muted">Notice by {shortDate(r.renewal.noticeBy)}</div>
-                          {r.renewal.rolled && <div className="text-[12px] text-muted">Next term (window passed)</div>}
+                          {r.renewal.pastNotice ? (
+                            <div>
+                              <StatusBadge tone="warning" title="The notice date has passed, but the contract doesn't auto-renew, so the renewal can still carry new pricing.">Notify now</StatusBadge>
+                            </div>
+                          ) : (
+                            <div className="text-muted">Notice by {shortDate(r.renewal.noticeBy)}</div>
+                          )}
                         </>
                       ) : (
                         <span className="text-muted">No contract</span>
@@ -386,13 +451,7 @@ export function PricingRank() {
           </table>
           {!shown.length && <div className="border-t border-line px-5 py-10 text-center text-[14px] text-muted">No customers match these filters.</div>}
         </div>
-        {pages > 1 && (
-          <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3">
-            <Button size="sm" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</Button>
-            <span className="tabular px-1 text-[13px] text-ink-2">Page {page + 1} of {pages}</span>
-            <Button size="sm" disabled={page >= pages - 1} onClick={() => setPage(page + 1)}>Next</Button>
-          </div>
-        )}
+        <Pager page={cur} pages={pages} onPage={setPage} total={shown.length} size={PAGE} noun="renewals" />
       </Card>
     </div>
   )

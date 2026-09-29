@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { AlertOctagon, ArrowDown, ArrowUp, ArrowUpDown, Copy, Download, FileSignature } from 'lucide-react'
+import { SignedContractButton } from '../components/SignedContractButton'
 import { useBook, signalsByAccount } from '../lib/useData'
 import { STATES, STATE_LIST } from '../data/geo'
 import { TEAM } from '../data/generate'
@@ -10,6 +11,7 @@ import { Button, Chip, Notice, PageHeader, Select, StatusBadge, TextInput } from
 import { downloadCsv, isFramed, money, num, relDays, sizeLabel } from '../lib/format'
 import { mrr } from '../lib/pricing'
 import { currentDeal } from '../lib/pipeline'
+import { Pager } from '../components/Pager'
 
 const SEGMENTS: Record<Species, readonly Segment[]> = {
   Hog: ['Sow Farm', 'Wean-to-Finish', 'Farrow-to-Finish', 'Contract Finisher', 'Integrated System'],
@@ -93,9 +95,11 @@ export default function Accounts() {
     })
   }, [book, deals, q, species, segment, status, stage, state, county, rep, sort])
 
-  const PAGE = 50
-  const pageRows = rows.slice(page * PAGE, page * PAGE + PAGE)
+  const PAGE = 20
   const pages = Math.max(1, Math.ceil(rows.length / PAGE))
+  // A stage change can drop rows out of the filtered list, so the page can outrun it.
+  const cur = Math.min(page, pages - 1)
+  const pageRows = rows.slice(cur * PAGE, cur * PAGE + PAGE)
   const reset = () => setPage(0)
   const toast = (text: string, error = false) => {
     setFlash({ text, error })
@@ -171,9 +175,9 @@ export default function Accounts() {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</Button>
-          <span className="tabular px-1 text-[13px] text-ink-2">Page {page + 1} of {pages}</span>
-          <Button size="sm" disabled={(page + 1) * PAGE >= rows.length} onClick={() => setPage(page + 1)}>Next</Button>
+          <Button size="sm" disabled={cur === 0} onClick={() => setPage(cur - 1)}>Previous</Button>
+          <span className="tabular px-1 text-[13px] text-ink-2">Page {cur + 1} of {pages}</span>
+          <Button size="sm" disabled={(cur + 1) * PAGE >= rows.length} onClick={() => setPage(cur + 1)}>Next</Button>
         </div>
       </div>
 
@@ -231,12 +235,17 @@ export default function Accounts() {
                     </select>
                     <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[12px] text-muted">
                       <span>{d ? d.type : 'Pick a stage to open a deal'}</span>
-                      {d?.contractId && (
+                      {d?.contractId && d.stage !== 'Closed Won' && (
                         <Link to={`/contracts/${d.contractId}`} className="inline-flex items-center gap-1 text-ink underline-offset-4 hover:underline">
                           <FileSignature size={11} aria-hidden /> {d.contractId.startsWith('KD-') ? 'Lucas draft' : 'Contract'}
                         </Link>
                       )}
                     </div>
+                    {(d?.stage === 'Closed Won' || a.status === 'Customer') && (
+                      <div className="mt-1">
+                        <SignedContractButton account={a} contractId={d?.contractId} compact />
+                      </div>
+                    )}
                   </td>
                   <td className={`${td} tabular text-right text-ink`}>{a.status === 'Customer' ? money(mrr(a) * 12) : none}</td>
                   <td className={td}>
@@ -260,6 +269,7 @@ export default function Accounts() {
           </tbody>
         </table>
         {!pageRows.length && <div className="border-t border-line px-5 py-10 text-center text-[14px] text-muted">No accounts match these filters. Clear the search or set a filter back to All.</div>}
+        <Pager page={cur} pages={pages} onPage={setPage} total={rows.length} size={PAGE} noun="accounts" />
       </div>
     </div>
   )

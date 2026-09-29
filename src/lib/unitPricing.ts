@@ -1,5 +1,5 @@
 import type { Account, Contract, Segment, Species, Subscription } from '../types'
-import { PRODUCT } from '../data/products'
+import { PRODUCT, baseListPrice } from '../data/products'
 
 // Unit-economics pricing: what each customer pays per hog, per head of cattle, or per
 // acre or bushel of grain, against a target the user sets by operation type. Pure
@@ -21,7 +21,11 @@ export interface PricingModel {
   capAtList: boolean
 }
 
-export const DEFAULT_MODEL: PricingModel = { hog: 2.25, cattle: 12, grainAcre: 2.75, grainBushel: 0.03, grainBasis: 'acre', segmentTargets: {}, capAtList: true }
+/** Starting targets: about what the median customer pays today (see calibrateFactors). */
+export const DEFAULT_MODEL: PricingModel = { hog: 1.9, cattle: 10.9, grainAcre: 2.3, grainBushel: 0.021, grainBasis: 'acre', segmentTargets: {}, capAtList: true }
+
+/** A renewal never raises the price by more than this, whatever the gap to target. */
+export const MAX_RENEWAL_INCREASE = 0.25
 
 /** Grain targets depend on the basis (per acre and per bushel differ ~100x), so they're keyed separately. */
 export const segmentKey = (segment: Segment, species: Species, basis: GrainBasis) => (species === 'Grain' ? `${segment}@${basis}` : segment)
@@ -52,6 +56,8 @@ export function volumeOf(a: Account, basis: GrainBasis): Volume | null {
 }
 
 export const currentArr = (a: Pick<Account, 'subscriptions'>) => a.subscriptions.reduce((s, x) => s + x.units * x.unitPrice, 0) * 12
+/** The account's subscription at the base (seed) list prices: a fixed yardstick for its product and site mix. */
+export const baseListArr = (a: Pick<Account, 'subscriptions'>) => a.subscriptions.reduce((s, x) => s + x.units * (baseListPrice(x.productId) ?? x.unitPrice), 0) * 12
 export const listArr = (a: Pick<Account, 'subscriptions'>) => a.subscriptions.reduce((s, x) => s + x.units * (PRODUCT[x.productId]?.listPrice ?? x.unitPrice), 0) * 12
 
 const median = (xs: number[]) => {
@@ -61,38 +67,76 @@ const median = (xs: number[]) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
 }
 
-/** Each segment's price per unit relative to its operation type (median to median). */
-export type SegmentFactors = Record<GrainBasis, Record<string, number>>
+/**
+ * Calibration from the current book, per pricing basis:
+ * - factor: each segment's median price per unit relative to its operation type
+ *   (a sow farm costs more to serve per hog than a finisher);
+ * - mix: what the segment's median customer pays per unit and pays against list,
+ *   so each account's target can follow the products and sites it actually has.
+ */
+export interface SegmentCalibration {
+  factor: number
+  /** Median current price per unit in the segment. */
+  medianPerUnit: number
+  /** Median current price as a share of the base list price. */
+  medianPriceToList: number
+}
+export interface SegmentFactors {
+  acre: Record<string, number>
+  bushel: Record<string, number>
+  segments: Record<GrainBasis, Record<string, SegmentCalibration>>
+}
 
 export function calibrateFactors(customers: Account[]): SegmentFactors {
-  const out: SegmentFactors = { acre: {}, bushel: {} }
+  const out: SegmentFactors = { acre: {}, bushel: {}, segments: { acre: {}, bushel: {} } }
   for (const basis of ['acre', 'bushel'] as const) {
     const bySpecies = new Map<Species, number[]>()
-    const bySegment = new Map<Segment, { species: Species; xs: number[] }>()
+    const bySegment = new Map<Segment, { species: Species; xs: number[]; ratios: number[] }>()
     for (const a of customers) {
       const v = volumeOf(a, basis)
       const arr = currentArr(a)
-      if (!v || !arr) continue
+      const list = baseListArr(a)
+      if (!v || !arr || !list) continue
       const p = arr / v.qty
       bySpecies.set(a.species, [...(bySpecies.get(a.species) ?? []), p])
-      const seg = bySegment.get(a.segment) ?? { species: a.species, xs: [] }
+      const seg = bySegment.get(a.segment) ?? { species: a.species, xs: [], ratios: [] }
       seg.xs.push(p)
+      seg.ratios.push(arr / list)
       bySegment.set(a.segment, seg)
     }
-    for (const [segment, { species, xs }] of bySegment) {
+    for (const [segment, { species, xs, ratios }] of bySegment) {
       const base = median(bySpecies.get(species) ?? [])
-      out[basis][segment] = base ? Number((median(xs) / base).toPrecision(2)) : 1
+      const factor = base ? Number((median(xs) / base).toPrecision(2)) : 1
+      out[basis][segment] = factor
+      out.segments[basis][segment] = { factor, medianPerUnit: median(xs), medianPriceToList: median(ratios) }
     }
   }
   return out
 }
 
-export function targetFor(a: Pick<Account, 'species' | 'segment'>, m: PricingModel, f: SegmentFactors): { value: number; overridden: boolean } {
+/**
+ * An account's target per unit: the operation (or segment) target for a typical
+ * customer, adjusted for this account's own product and site mix. Without the mix
+ * adjustment a customer with one module would look far under target next to one
+ * running the full suite.
+ */
+export function targetFor(a: Pick<Account, 'species' | 'segment'> & Partial<Pick<Account, 'subscriptions' | 'headCount' | 'acres' | 'crops'>>, m: PricingModel, f: SegmentFactors): { value: number; overridden: boolean; mix: number } {
   const basis = m.grainBasis
+  const b = a.species === 'Grain' ? basis : 'acre'
   const own = m.segmentTargets[segmentKey(a.segment, a.species, basis)]
-  if (own !== undefined) return { value: own, overridden: true }
-  return { value: operationTarget(m, a.species) * (f[a.species === 'Grain' ? basis : 'acre'][a.segment] ?? 1), overridden: false }
+  const segTarget = own ?? operationTarget(m, a.species) * (f[b][a.segment] ?? 1)
+  let mix = 1
+  const cal = f.segments?.[b]?.[a.segment]
+  if (cal && a.subscriptions) {
+    const v = volumeOf(a as Account, basis)
+    const list = baseListArr(a as Account)
+    if (v && list && cal.medianPerUnit) mix = (cal.medianPriceToList * (list / v.qty)) / cal.medianPerUnit
+  }
+  return { value: segTarget * mix, overridden: own !== undefined, mix }
 }
+
+/** The target for a segment's typical customer (what the segment rows in the model show). */
+export const segmentTarget = (species: Species, segment: Segment, m: PricingModel, f: SegmentFactors) => targetFor({ species, segment }, m, f).value
 
 // ---------- renewal ----------
 
@@ -102,6 +146,9 @@ export interface RenewalWindow {
   noticeDays: number
   /** The notice window for the current term end has passed, so this is the renewal after it. */
   rolled: boolean
+  /** The notice date has passed, but the agreement doesn't auto-renew, so its term end can still carry new pricing. */
+  pastNotice: boolean
+  /** The current term's end: the renewal that's up next, whether or not this change can make it. */
   termEnd: string
   paymentTerms: string
 }
@@ -114,14 +161,16 @@ const addMonths = (d: Date, n: number) => {
 }
 
 export function renewalWindow(c: Contract, today = new Date()): RenewalWindow {
-  let end = new Date(c.end)
-  let rolled = false
-  // Past the notice deadline, the agreement renews on current terms; the next chance is a year later.
-  while (end.getTime() - c.renewalNoticeDays * DAY < today.getTime()) {
-    end = addMonths(end, 12)
-    rolled = true
-  }
-  return { date: end.toISOString(), noticeBy: new Date(end.getTime() - c.renewalNoticeDays * DAY).toISOString(), noticeDays: c.renewalNoticeDays, rolled, termEnd: c.end, paymentTerms: c.paymentTerms }
+  // An end date already behind us rolled into the current term (the record keeps the original date).
+  let termEnd = new Date(c.end)
+  while (termEnd < today) termEnd = addMonths(termEnd, 12)
+  const noticeFor = (d: Date) => new Date(d.getTime() - c.renewalNoticeDays * DAY)
+  // Past the notice deadline, an auto-renewing agreement renews on current terms and the next chance is a
+  // year later. One without auto-renew just ends, so its term end stays the pricing date.
+  const late = noticeFor(termEnd) < today
+  const rolled = late && c.autoRenew
+  const end = rolled ? addMonths(termEnd, 12) : termEnd
+  return { date: end.toISOString(), noticeBy: noticeFor(end).toISOString(), noticeDays: c.renewalNoticeDays, rolled, pastNotice: late && !c.autoRenew, termEnd: termEnd.toISOString(), paymentTerms: c.paymentTerms }
 }
 
 // ---------- repricing ----------
@@ -196,9 +245,11 @@ export function rankAccount(a: Account, c: Contract | undefined, m: PricingModel
   const status: RankStatus = gap < -AT_TARGET_BAND ? 'Under target' : gap > AT_TARGET_BAND ? 'Over target' : 'At target'
   const targetArr = t.value * volume.qty
   const list = listArr(a)
-  // Under target: move to target at renewal (not above list while the cap is on). Otherwise hold the price.
+  // Under target: move to target at renewal, by at most MAX_RENEWAL_INCREASE, and not above list
+  // while the cap is on. Otherwise hold the price.
   const cap = m.capAtList !== false
-  const goal = status === 'Under target' ? Math.max(cur, cap ? Math.min(targetArr, list) : targetArr) : cur
+  const ceiling = Math.min(cur * (1 + MAX_RENEWAL_INCREASE), cap ? list : Infinity)
+  const goal = status === 'Under target' ? Math.max(cur, Math.min(targetArr, ceiling)) : cur
   const lines = repriceLines(a.subscriptions, goal / 12, cap)
   const renewalArr = lines.reduce((s, l) => s + l.units * l.newPrice, 0) * 12
   return {
@@ -213,7 +264,7 @@ export function rankAccount(a: Account, c: Contract | undefined, m: PricingModel
     targetArr,
     listArr: list,
     renewalArr,
-    cappedAtList: cap && status === 'Under target' && targetArr > list + 1,
+    cappedAtList: cap && status === 'Under target' && targetArr > list + 1 && list <= cur * (1 + MAX_RENEWAL_INCREASE),
     upliftArr: Math.max(0, renewalArr - cur),
     toTargetArr: status === 'Under target' ? Math.max(0, targetArr - cur) : 0,
     lines,

@@ -2,27 +2,15 @@ import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useBook } from '../lib/useData'
 import { useCrm } from '../store'
-import type { Account, Contract } from '../types'
-import { Button, Card, PageHeader, Pill, Stat, StatusBadge, Tabs, TextLink } from '../components/ui'
+import type { Account, Contract, Invoice } from '../types'
+import { Send } from 'lucide-react'
+import { Button, Card, Modal, PageHeader, Pill, StatusBadge, Tabs, TextLink, inputClass } from '../components/ui'
+import { InvoicePreview } from '../components/InvoicePreview'
+import { Pager } from '../components/Pager'
+import { draftBandNotice, type PriceChangeDraft } from '../lib/priceChangeDrafts'
 import { money, num, shortDate } from '../lib/format'
 import { CPI_ESTIMATE, type PricingAnalysis, type PriceStatus } from '../lib/pricing'
-import { pickContact } from '../lib/outreach'
 import { PricingRank } from './pricing/PricingRank'
-
-export function priceNoticeDraft(a: Account, pa: PricingAnalysis) {
-  const c = pickContact(a, ['CFO', 'Owner', 'GM'])
-  const eff = pa.ability ? new Date(pa.ability.effectiveDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : 'your next renewal'
-  const clause = pa.ability?.window === 'Anniversary' ? 'Section 2 (Fees & Price Adjustments) of our agreement' : 'your upcoming renewal'
-  return {
-    accountId: a.id,
-    trigger: 'Price normalization',
-    playbook: 'pricing',
-    contactName: c.name,
-    contactEmail: c.email,
-    subject: `${a.name}: pricing update effective ${eff}`,
-    body: `Hi ${c.name.split(' ')[0]},\n\nThank you for working with ThiboLiSoft. In line with ${clause}, we're writing to let you know about a ${pa.recommendedPct.toFixed(1)}% adjustment to your subscription fees, effective ${eff}. Your new monthly total will be about ${money(pa.currentMrr * (1 + pa.recommendedPct / 100))}.\n\nThis keeps your pricing in line with operations of a similar size, and it funds this year's work on HerdTrack closeouts and BarnSense alarm routing. I'm happy to walk through the details, or look at options such as an annual prepay, on a quick call.\n\nBest,\n${a.rep}\nThiboLiSoft`,
-  }
-}
 
 /** Discount track: the grey segment marks the normal band, the ink tick marks the actual discount. */
 export function BandBar({ pa }: { pa: PricingAnalysis }) {
@@ -107,48 +95,133 @@ export default function Pricing() {
   )
 }
 
+const DAY = 86400000
+const BAND_PAGE = 15
+
+function MiniStat({ label, value, sub, highlight }: { label: string; value: string; sub: string; highlight?: boolean }) {
+  return (
+    <div className={`min-w-0 rounded-[var(--radius-card)] px-4 py-3 ${highlight ? 'bg-lime text-on-lime' : 'border border-line bg-surface'}`}>
+      <div className={`text-[13px] ${highlight ? 'text-black/70' : 'text-ink-2'}`}>{label}</div>
+      <div className="figure mt-1 text-[30px] leading-none">{value}</div>
+      <div className={`mt-1 text-[12px] ${highlight ? 'text-black/65' : 'text-muted'}`}>{sub}</div>
+    </div>
+  )
+}
+
+/** Each account's newest price-change invoice that isn't void. */
+export function lastNotices(invoices: Invoice[]) {
+  const m = new Map<string, Invoice>()
+  for (const i of invoices) if (i.status !== 'Void' && (!m.has(i.accountId) || i.createdAt > m.get(i.accountId)!.createdAt)) m.set(i.accountId, i)
+  return m
+}
+
+/** The action for an under-priced account whose window is open. The band check and the account page share it. */
+export function NoticeAction({ a, pa, contract, last, onPreview, primary }: { a: Account; pa: PricingAnalysis; contract?: Contract; last?: Invoice; onPreview: (d: PriceChangeDraft) => void; primary?: boolean }) {
+  // A sent notice blocks another only until it takes effect; then any remaining gap can be noticed.
+  if (last?.status === 'Sent' && !last.appliedAt) return <StatusBadge tone="good">Notice sent {shortDate(last.sentAt ?? '')}</StatusBadge>
+  if (last?.status === 'Draft')
+    return (
+      <Link to={`/outreach?kind=price&account=${a.id}`}>
+        <StatusBadge tone="warning">Draft awaiting approval</StatusBadge>
+      </Link>
+    )
+  const draft = draftBandNotice(a, pa, contract)
+  return (
+    <Button size={primary ? 'md' : 'sm'} variant={primary ? 'primary' : 'secondary'} onClick={() => draft && onPreview(draft)} disabled={!draft} title="Preview the revised-pricing email and invoice, then send">
+      <Send size={12} /> Notify +{pa.recommendedPct.toFixed(1)}%
+    </Button>
+  )
+}
+
+/** Preview of the revised-pricing email and invoice; sending is the approval. */
+export function NoticeModal({ draft, onClose }: { draft: PriceChangeDraft; onClose: () => void }) {
+  const pushPriceChange = useCrm((s) => s.pushPriceChange)
+  const [subject, setSubject] = useState(draft.email.subject)
+  const [body, setBody] = useState(draft.email.body)
+  const d = { ...draft, email: { ...draft.email, subject, body } }
+  const inv = { ...draft.invoice, outreachId: '', createdAt: new Date().toISOString(), emailGenerated: { subject, body } }
+  return (
+    <Modal open onClose={onClose} title={`Revised pricing for ${draft.invoice.billTo.name}`} wide>
+      <div className="flex flex-col gap-3">
+        <div className="text-[13px] text-ink-2">
+          To {draft.email.contactName} &lt;{draft.email.contactEmail}&gt;. Sending here sends the email with the revised invoice (simulated in this demo).
+        </div>
+        <label className="flex flex-col gap-1.5 text-[13px] text-ink-2">
+          <span>Subject</span>
+          <input value={subject} onChange={(e) => setSubject(e.target.value)} className={`${inputClass} w-full font-medium`} />
+        </label>
+        <label className="flex flex-col gap-1.5 text-[13px] text-ink-2">
+          <span>Message</span>
+          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={10} className={`${inputClass.replace('h-9', 'py-2.5')} w-full resize-y leading-relaxed`} />
+        </label>
+        <div className="text-[13px] text-ink-2">Revised invoice</div>
+        <InvoicePreview inv={inv} />
+        <div className="mt-2 flex flex-wrap justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => { pushPriceChange(d, false); onClose() }}>Save as draft for approval</Button>
+          <Button variant="primary" onClick={() => { pushPriceChange(d, true); onClose() }}>
+            <Send size={13} /> Send email and invoice
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 function BandCheck() {
   const book = useBook()
-  const proposePrice = useCrm((s) => s.proposePrice)
-  const queueOutreach = useCrm((s) => s.queueOutreach)
-  const proposals = useCrm((s) => s.priceProposals)
+  const invoices = useCrm((s) => s.invoices)
   const [tab, setTab] = useState<PriceStatus | 'All'>('Under-priced')
-  const [windowFilter, setWindowFilter] = useState<'all' | 'now'>('all')
+  // Pricing opportunities: a change that takes effect in the next 30, 60 or 90 days, most imminent notice first.
+  const [windowDays, setWindowDays] = useState<'30' | '60' | '90' | 'all'>('90')
+  const [page, setPage] = useState(0)
+  const [notice, setNotice] = useState<PriceChangeDraft | null>(null)
+  const noticeT = (pa: PricingAnalysis) => (pa.ability ? new Date(pa.ability.noticeBy).getTime() : Infinity)
+  const inWindow = (pa: PricingAnalysis) => {
+    if (windowDays === 'all') return true
+    if (!pa.ability) return false
+    const d = new Date(pa.ability.effectiveDate).getTime() - Date.now()
+    return d >= 0 && d <= Number(windowDays) * DAY
+  }
 
   const rows = useMemo(() => {
     return book.customers
       .map((a) => ({ a, pa: book.pricing[a.id], c: a.contractId ? book.contractById[a.contractId] : undefined }))
       .filter((r) => r.pa && (tab === 'All' || r.pa.status === tab))
-      .filter((r) => windowFilter === 'all' || (r.pa.ability?.canActNow && new Date(r.pa.ability.noticeBy).getTime() - Date.now() < 90 * 86400000))
-      .sort((x, y) => y.pa.upliftArr - x.pa.upliftArr || Math.abs(y.pa.neededPct) - Math.abs(x.pa.neededPct))
-  }, [book, tab, windowFilter])
+      .filter((r) => inWindow(r.pa))
+      // Windows that can still be noticed come first; missed notices and locks go last.
+      .sort((x, y) => (windowDays === 'all' ? y.pa.upliftArr - x.pa.upliftArr || Math.abs(y.pa.neededPct) - Math.abs(x.pa.neededPct) : Number(!x.pa.ability?.canActNow) - Number(!y.pa.ability?.canActNow) || noticeT(x.pa) - noticeT(y.pa)))
+  }, [book, tab, windowDays])
+  const lastNotice = useMemo(() => lastNotices(invoices), [invoices])
+  const pages = Math.max(1, Math.ceil(rows.length / BAND_PAGE))
+  const cur = Math.min(page, pages - 1)
 
   const all = Object.values(book.pricing)
   const under = all.filter((p) => p.status === 'Under-priced')
   const over = all.filter((p) => p.status === 'Over-priced')
-  const soon = under.filter((p) => p.ability?.canActNow && new Date(p.ability.noticeBy).getTime() - Date.now() < 90 * 86400000)
+  const soon = under.filter((p) => inWindow(p) && (windowDays === 'all' || !!p.ability?.canActNow))
 
   return (
     <div>
       <p className="mb-5 max-w-[80ch] text-[14px] leading-relaxed text-ink-2">Each current customer's discount against the normal band for its size. Herdbook checks every suggestion against the contract's price clause, so you only see changes the contract allows.</p>
       <div className="flex flex-col gap-5">
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
-          <Stat label="Under-priced customers" value={under.length} sub={`${money(under.reduce((s, p) => s + p.upliftArr, 0))} ARR recoverable`} />
-          <Stat label="Actionable in the next 90 days" value={soon.length} sub={`${money(soon.reduce((s, p) => s + p.upliftArr, 0))} ARR with notice windows open`} highlight />
-          <Stat label="Over-priced, churn risk" value={over.length} sub={`${money(over.reduce((s, p) => s + p.currentMrr * 12, 0))} ARR exposed`} tone={over.length ? 'serious' : undefined} />
-          <Stat label="In band" value={all.length - under.length - over.length} sub={`of ${num(all.length)} customers`} />
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <MiniStat highlight label={windowDays === 'all' ? 'Under-priced, any window' : `Under-priced, can change in the next ${windowDays} days`} value={num(soon.length)} sub={`${money(soon.reduce((s, p) => s + p.upliftArr, 0))} ARR to recover`} />
+          <MiniStat label="Under-priced customers" value={num(under.length)} sub={`${money(under.reduce((s, p) => s + p.upliftArr, 0))} ARR in total`} />
+          <MiniStat label="Over-priced, churn risk" value={num(over.length)} sub={`${money(over.reduce((s, p) => s + p.currentMrr * 12, 0))} ARR exposed`} />
+          <MiniStat label="In band" value={num(all.length - under.length - over.length)} sub={`of ${num(all.length)} customers`} />
         </div>
 
         <Card pad={false}>
           <div className="px-5 pt-5">
-            <Tabs value={tab} onChange={setTab} tabs={(['Under-priced', 'Over-priced', 'In band', 'All'] as const).map((t) => ({ value: t, label: t }))} />
-            <div className="mb-4 flex flex-wrap items-center gap-1.5" role="group" aria-label="Notice window">
-              <Pill active={windowFilter === 'all'} onClick={() => setWindowFilter('all')}>
-                Any window
-              </Pill>
-              <Pill active={windowFilter === 'now'} onClick={() => setWindowFilter('now')}>
-                Notice due within 90 days
-              </Pill>
+            <Tabs value={tab} onChange={(v) => { setTab(v); setPage(0) }} tabs={(['Under-priced', 'Over-priced', 'In band', 'All'] as const).map((t) => ({ value: t, label: t }))} />
+            <div className="mb-4 flex flex-wrap items-center gap-1.5" role="group" aria-label="Pricing window">
+              {(['30', '60', '90', 'all'] as const).map((w) => (
+                <Pill key={w} active={windowDays === w} onClick={() => { setWindowDays(w); setPage(0) }}>
+                  {w === 'all' ? 'Any window' : `Next ${w} days`}
+                </Pill>
+              ))}
+              <span className="ml-1 text-[13px] text-muted">{windowDays === 'all' ? 'Largest uplift first' : 'Most imminent notice first'}</span>
             </div>
           </div>
           <div className="overflow-x-auto">
@@ -170,7 +243,7 @@ function BandCheck() {
                 </tr>
               </thead>
               <tbody>
-                {rows.slice(0, 150).map(({ a, pa, c }) => (
+                {rows.slice(cur * BAND_PAGE, cur * BAND_PAGE + BAND_PAGE).map(({ a, pa, c }) => (
                   <tr key={a.id} className="border-t border-line align-top hover:bg-accent-soft/60">
                     <td className={td}>
                       <Link to={`/accounts/${a.id}`} className="font-medium text-ink underline-offset-4 hover:underline">
@@ -209,12 +282,18 @@ function BandCheck() {
                             {pa.ability.window}, <span className="whitespace-nowrap">{shortDate(pa.ability.effectiveDate)}</span>
                           </div>
                           <div className="mt-0.5">
-                            {pa.ability.canActNow ? (
+                            {!pa.ability.canActNow ? (
+                              pa.ability.window === 'Locked' ? (
+                                <span className="text-muted">Price locked</span>
+                              ) : (
+                                <StatusBadge tone="critical" title="The notice deadline has passed. This change moves to the next window.">Notice missed</StatusBadge>
+                              )
+                            ) : new Date(pa.ability.noticeBy).getTime() < Date.now() ? (
+                              <StatusBadge tone="warning" title="The notice date has passed, but the contract doesn't auto-renew, so the renewal can still carry new pricing.">Notify now</StatusBadge>
+                            ) : (
                               <span className="text-ink-2">
                                 Notice by <span className="whitespace-nowrap">{shortDate(pa.ability.noticeBy)}</span>
                               </span>
-                            ) : (
-                              <StatusBadge tone="critical" title="The notice deadline has passed. This change moves to the next window.">Notice missed</StatusBadge>
                             )}
                           </div>
                         </>
@@ -234,20 +313,7 @@ function BandCheck() {
                     <td className={`${td} tabular text-right text-good-text`}>{pa.upliftArr > 0 ? `+${money(pa.upliftArr)}` : none}</td>
                     <td className={`${td} text-right`}>
                       {pa.status === 'Under-priced' && pa.ability?.canActNow ? (
-                        proposals[a.id] ? (
-                          <StatusBadge tone="good">Proposed</StatusBadge>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => {
-                              proposePrice(a.id, pa.recommendedPct, pa.ability!.effectiveDate)
-                              queueOutreach({ ...priceNoticeDraft(a, pa), auto: false, status: 'Draft' })
-                            }}
-                          >
-                            Propose +{pa.recommendedPct.toFixed(1)}%
-                          </Button>
-                        )
+                        <NoticeAction a={a} pa={pa} contract={c} last={lastNotice.get(a.id)} onPreview={setNotice} />
                       ) : pa.status === 'Over-priced' ? (
                         <Link to={`/accounts/${a.id}`} className="whitespace-nowrap">
                           <TextLink>Retention plan</TextLink>
@@ -260,10 +326,12 @@ function BandCheck() {
             </table>
             {!rows.length && (
               <div className="border-t border-line px-5 py-10 text-center text-[14px] text-muted">
-                {windowFilter === 'now' ? 'No customers in this status have a notice due within 90 days. Switch to Any window to see them all.' : 'No customers in this status.'}
+                {windowDays !== 'all' ? `No customers in this status can change price in the next ${windowDays} days. Widen the window to see more.` : 'No customers in this status.'}
               </div>
             )}
           </div>
+          <Pager page={cur} pages={pages} onPage={setPage} total={rows.length} size={BAND_PAGE} noun="customers" />
+          {notice && <NoticeModal draft={notice} onClose={() => setNotice(null)} />}
         </Card>
 
         <Card title="How normalization works">
@@ -277,7 +345,7 @@ function BandCheck() {
             <li className="min-w-0 rounded-[14px] bg-accent-soft p-4">
               <h3 className="text-[14px] font-medium text-ink">Contract check</h3>
               <p className="mt-2 text-[14px] leading-relaxed text-ink-2">
-                Annual-increase and CPI clauses allow increases up to the cap at the anniversary, with notice (CPI estimate {CPI_ESTIMATE}%). Fixed-term, lock and renegotiation clauses only allow resets at renewal or after the lock ends. A missed notice window pushes the move to the next one.
+                Annual-increase and CPI clauses allow increases up to the cap at the anniversary, with notice (CPI estimate {CPI_ESTIMATE}%). Fixed-term, lock and renegotiation clauses only allow resets at renewal or after the lock ends. A missed notice window pushes the move to the next one, unless the contract doesn't auto-renew.
               </p>
             </li>
             <li className="min-w-0 rounded-[14px] bg-accent-soft p-4">

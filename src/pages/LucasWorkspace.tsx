@@ -9,6 +9,7 @@ import { chatWithLucas, dealContext, lucasStatus, reviewContract, type LucasItem
 import { Button, Card, Chip, Empty, LucasMark, Notice, PageHeader, Pill, StatusBadge, TextLink, type Tone } from '../components/ui'
 import { isFramed, money, saveText, shortDate } from '../lib/format'
 import { pickContact } from '../lib/outreach'
+import { EmailTrail } from './contracts/DealMail'
 
 // Word-level diff (LCS) for showing redlines.
 function diffWords(a: string, b: string): { t: string; k: 'same' | 'del' | 'ins' }[] {
@@ -346,15 +347,16 @@ export default function LucasWorkspace() {
                   </span>
                 }
                 action={
-                  it && (
+                  (it || r.agreed) && (
                     <div className="flex flex-wrap items-center gap-3">
-                      <StatusBadge tone={recTone(it.recommendation)}>Lucas: {it.recommendation}</StatusBadge>
-                      <StatusBadge tone={riskTone(it.risk)}>{it.risk} risk</StatusBadge>
+                      {r.agreed && <StatusBadge tone="good" title={`“${r.agreed.quote}” (${r.agreed.by}, ${shortDate(r.agreed.at)})`}>Customer agreed{r.agreed.value && r.agreed.value !== 'our counter' ? `: ${r.agreed.value}` : ''}</StatusBadge>}
+                      {it && <StatusBadge tone={recTone(it.recommendation)}>Lucas: {it.recommendation}</StatusBadge>}
+                      {it && <StatusBadge tone={riskTone(it.risk)}>{it.risk} risk</StatusBadge>}
                     </div>
                   )
                 }
               >
-                <Label className="mb-1.5">Customer redline</Label>
+                <Label className="mb-1.5">Customer redline{r.source ? <span className="ml-1 normal-case tracking-normal text-muted">· from {r.source.from}'s email, {shortDate(r.source.at)}</span> : null}</Label>
                 <Diff a={r.original} b={r.proposed} />
                 <div className="mt-4 rounded-[14px] bg-accent-soft px-4 py-3">
                   <Label className="mb-1">Customer note</Label>
@@ -436,6 +438,13 @@ export default function LucasWorkspace() {
         </div>
 
         <div className="flex min-w-0 flex-col gap-5">
+          <EmailTrail contractId={c.id} />
+          {review && c.redlines.some((r) => !itemFor(r.id)) && (
+            <div role="status" className="flex items-start gap-2.5 rounded-[14px] bg-accent-soft px-4 py-3 text-[14px] text-ink">
+              <AlertTriangle size={14} strokeWidth={2.25} className="mt-[3px] shrink-0 text-warning" aria-hidden />
+              <span className="min-w-0">{c.redlines.filter((r) => !itemFor(r.id)).length} of the redlines arrived after Lucas's review. Ask Lucas to review again to cover them.</span>
+            </div>
+          )}
           {review ? (
             <Card
               title={
