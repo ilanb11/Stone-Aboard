@@ -43,11 +43,13 @@ export function useBook(): Book {
   const accounts = useCrm((s) => s.accounts)
   const contracts = useCrm((s) => s.contracts)
   const opportunities = useCrm((s) => s.opportunities)
+  // List prices feed the pricing analysis, so an edited price list rebuilds the book.
+  const priceList = useCrm((s) => s.priceList)
   return useMemo(() => {
-    const key = [accounts, contracts, opportunities]
+    const key = [accounts, contracts, opportunities, priceList]
     if (cache && cache.key.every((k, i) => k === key[i])) return cache.book
     const book = build(accounts, contracts, opportunities)
     cache = { key, book }
     return book
-  }, [accounts, contracts, opportunities])
+  }, [accounts, contracts, opportunities, priceList])
 }

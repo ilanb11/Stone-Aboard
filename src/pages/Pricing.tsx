@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useBook } from '../lib/useData'
 import { useCrm } from '../store'
 import type { Account, Contract } from '../types'
@@ -7,6 +7,7 @@ import { Button, Card, PageHeader, Pill, Stat, StatusBadge, Tabs, TextLink } fro
 import { money, num, shortDate } from '../lib/format'
 import { CPI_ESTIMATE, type PricingAnalysis, type PriceStatus } from '../lib/pricing'
 import { pickContact } from '../lib/outreach'
+import { PricingRank } from './pricing/PricingRank'
 
 export function priceNoticeDraft(a: Account, pa: PricingAnalysis) {
   const c = pickContact(a, ['CFO', 'Owner', 'GM'])
@@ -85,6 +86,28 @@ const td = 'px-4 py-4 first:pl-5 last:pr-5'
 const none = <span className="text-muted">—</span>
 
 export default function Pricing() {
+  const [params, setParams] = useSearchParams()
+  const view = params.get('view') === 'band' ? 'band' : 'rank'
+  return (
+    <div>
+      <PageHeader
+        title="Pricing"
+        subtitle="Two lenses on every customer's price. Pricing rank compares what each one pays per hog, head or acre with the targets you set and drafts the renewal change. The band check compares its discount with peers of its size against what its contract allows."
+      />
+      <Tabs
+        value={view}
+        onChange={(v) => setParams(v === 'rank' ? {} : { view: v }, { replace: true })}
+        tabs={[
+          { value: 'rank', label: 'Pricing rank' },
+          { value: 'band', label: 'Discount band and contract check' },
+        ]}
+      />
+      {view === 'rank' ? <PricingRank /> : <BandCheck />}
+    </div>
+  )
+}
+
+function BandCheck() {
   const book = useBook()
   const proposePrice = useCrm((s) => s.proposePrice)
   const queueOutreach = useCrm((s) => s.queueOutreach)
@@ -107,10 +130,7 @@ export default function Pricing() {
 
   return (
     <div>
-      <PageHeader
-        title="Pricing"
-        subtitle="Each current customer's discount against the normal band for its size. Herdbook checks every suggestion against the contract's price clause, so you only see changes the contract allows."
-      />
+      <p className="mb-5 max-w-[80ch] text-[14px] leading-relaxed text-ink-2">Each current customer's discount against the normal band for its size. Herdbook checks every suggestion against the contract's price clause, so you only see changes the contract allows.</p>
       <div className="flex flex-col gap-5">
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
           <Stat label="Under-priced customers" value={under.length} sub={`${money(under.reduce((s, p) => s + p.upliftArr, 0))} ARR recoverable`} />
@@ -132,17 +152,19 @@ export default function Pricing() {
             </div>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1040px] text-[14px]">
+            <table className="w-full min-w-[1160px] text-[14px]">
               <thead>
                 <tr>
                   <th className={`min-w-[180px] ${th}`}>Customer</th>
+                  <th className={th}>Sales rep</th>
                   <th className={thNum}>MRR</th>
                   <th className={`min-w-[190px] ${th}`}>Discount vs. normal band</th>
                   <th className={`min-w-[160px] ${th}`}>Price clause</th>
                   <th className={`min-w-[150px] ${th}`}>Window</th>
                   <th className={thNum}>Needed</th>
                   <th className={thNum}>Uplift ARR</th>
-                  <th className={thNum}>
+                  {/* relative keeps the hidden label inside the scrolling table instead of widening the page */}
+                  <th className={`relative ${thNum}`}>
                     <span className="sr-only">Action</span>
                   </th>
                 </tr>
@@ -158,6 +180,7 @@ export default function Pricing() {
                         {a.segment}, {a.state}
                       </div>
                     </td>
+                    <td className={`${td} whitespace-nowrap text-[13px] text-ink-2`}>{a.rep}</td>
                     <td className={`${td} tabular text-right`}>{money(pa.currentMrr)}</td>
                     <td className={td}>
                       <BandBar pa={pa} />

@@ -83,7 +83,7 @@ export default function Contracts() {
                 <th className={`${th} text-left`}>Price clause</th>
                 <th className={`${th} text-right`}>Value</th>
                 <th className={`${th} text-left`}>{tab === 'drafts' ? 'Intro email' : 'Redlines'}</th>
-                <th className={`${th} pr-5`}>
+                <th className={`${th} relative pr-5`}>
                   <span className="sr-only">Actions</span>
                 </th>
               </tr>

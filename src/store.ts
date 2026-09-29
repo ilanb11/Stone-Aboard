@@ -1,19 +1,23 @@
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
-import type { Account, Activity, Contract, GrantApplication, GrantSectionId, Opportunity, OppStage, OrderLine, Outreach } from './types'
+import type { Account, Activity, Contract, GrantApplication, GrantSectionId, Invoice, Opportunity, OppStage, OrderLine, Outreach } from './types'
 import { generateDataset, SEED_VERSION } from './data/generate'
-import { PRODUCT, unitsFor } from './data/products'
+import { PRODUCT, applyPriceList, unitsFor } from './data/products'
 import { expectedDiscount } from './lib/pricing'
 import type { LucasReview } from './lib/lucas'
 import { draftNegotiationPackage } from './lib/lucasDrafts'
 import { currentDeal, newOpportunityFor } from './lib/pipeline'
 import { affectedAccounts, grantSource, grantsForChange, rankGrants, regulatoryChange } from './lib/grants'
 import { draftGrantApplication, grantApplicationId } from './lib/grantDrafts'
+import { DEFAULT_MODEL, calibrateFactors, rankAccount, type PricingModel } from './lib/unitPricing'
+import { draftPriceChange } from './lib/priceChangeDrafts'
 
 // Deterministic seed data. Signals are reference data; everything else is
 // user-editable CRM state persisted in localStorage.
 export const dataset = generateDataset()
 export const CURRENT_USER = 'Avery Collins'
+/** Segment price factors for the unit-economics model, calibrated once from the seeded book. */
+export const SEGMENT_FACTORS = calibrateFactors(dataset.accounts.filter((a) => a.status === 'Customer'))
 
 // ---------- persisted-state migration ----------
 // Stage names before the six-stage pipeline (seed version 13 and earlier).
@@ -153,6 +157,24 @@ interface CrmState {
   setGrantSection: (id: string, section: GrantSectionId, text: string | null) => void
   setGrantStatus: (id: string, status: GrantApplication['status']) => void
   discardGrantApplication: (id: string) => void
+  /** Unit-economics targets (Pricing rank). */
+  pricingModel: PricingModel
+  setPricingModel: (patch: Partial<PricingModel>) => void
+  setSegmentTarget: (key: string, value: number | null) => void
+  resetPricingModel: () => void
+  /** The user's list prices (product id -> $ per unit per month); products not listed keep the base price. */
+  priceList: Record<string, number>
+  setListPrice: (productId: string, price: number | null) => void
+  resetPriceList: () => void
+  invoices: Invoice[]
+  /** Pricing rank automation: a price-change email and a pre-drafted invoice per account, both waiting for approval. */
+  draftPriceChanges: (accountIds: string[]) => { created: number; updated: number; kept: number; skipped: number }
+  /** Re-run open price-change drafts after the model or price list changes (hand-edited emails are left alone and flagged). */
+  refreshPriceDrafts: () => void
+  /** Approve a price change: sends the email with its invoice (simulated). */
+  approvePriceChange: (outreachId: string) => void
+  /** Skip an outreach draft; a price-change invoice attached to it is voided. */
+  skipOutreach: (id: string) => void
   toast: Toast | null
   notify: (t: Omit<Toast, 'id'>) => void
   dismissToast: () => void
@@ -175,7 +197,17 @@ const initial = () => ({
   priceProposals: {},
   grantApplications: [] as GrantApplication[],
   grantTriggered: {} as Record<string, string>,
+  pricingModel: DEFAULT_MODEL,
+  priceList: {} as Record<string, number>,
+  invoices: [] as Invoice[],
 })
+
+/** One account's unit-economics rank from the live state (used by the price-change drafts). */
+function rankFromState(st: Pick<CrmState, 'contracts' | 'pricingModel'>, a: Account) {
+  const c = a.contractId ? st.contracts.find((x) => x.id === a.contractId) : undefined
+  const r = rankAccount(a, c, st.pricingModel, SEGMENT_FACTORS)
+  return r && { ...r, rank: 0 }
+}
 
 export const useCrm = create<CrmState>()(
   persist(
@@ -323,6 +355,127 @@ export const useCrm = create<CrmState>()(
         if (status === 'Reviewed') get().log(g.accountId, 'Note', `Grant application ${grantSource.get(g.grantId)?.shortName ?? g.grantId} reviewed and ready to share with the customer. Not submitted.`)
       },
       discardGrantApplication: (id) => set((s) => ({ grantApplications: s.grantApplications.filter((g) => g.id !== id) })),
+      pricingModel: DEFAULT_MODEL,
+      setPricingModel: (patch) => {
+        set((s) => ({ pricingModel: { ...s.pricingModel, ...patch } }))
+        get().refreshPriceDrafts()
+      },
+      setSegmentTarget: (key, value) => {
+        set((s) => {
+          const segmentTargets = { ...s.pricingModel.segmentTargets }
+          if (value === null) delete segmentTargets[key]
+          else segmentTargets[key] = value
+          return { pricingModel: { ...s.pricingModel, segmentTargets } }
+        })
+        get().refreshPriceDrafts()
+      },
+      resetPricingModel: () => {
+        set({ pricingModel: DEFAULT_MODEL })
+        get().refreshPriceDrafts()
+      },
+      priceList: {},
+      setListPrice: (productId, price) => {
+        const next = { ...get().priceList }
+        if (price === null) delete next[productId]
+        else next[productId] = price
+        applyPriceList(next)
+        set({ priceList: next })
+        get().refreshPriceDrafts()
+      },
+      resetPriceList: () => {
+        applyPriceList({})
+        set({ priceList: {} })
+        get().refreshPriceDrafts()
+      },
+      invoices: [],
+      draftPriceChanges: (accountIds) => {
+        const st = get()
+        const counts = { created: 0, updated: 0, kept: 0, skipped: 0 }
+        const addOutreach: Outreach[] = []
+        const addInvoices: Invoice[] = []
+        const outreachPatch = new Map<string, Partial<Outreach>>()
+        const invoicePatch = new Map<string, Invoice>()
+        const taken = new Set(st.invoices.map((i) => i.id))
+        for (const id of accountIds) {
+          const a = st.accounts.find((x) => x.id === id)
+          const r = a && a.status === 'Customer' ? rankFromState(st, a) : null
+          const d = r && draftPriceChange(r)
+          if (!d) {
+            counts.skipped++
+            continue
+          }
+          // One open price change per account: redrafting updates it instead of adding another.
+          const open = st.invoices.find((i) => i.accountId === id && i.status === 'Draft')
+          if (open) {
+            const email = st.outreach.find((o) => o.id === open.outreachId)
+            if (email && (email.subject !== open.emailGenerated.subject || email.body !== open.emailGenerated.body)) {
+              counts.kept++ // the email was edited by hand, so it isn't overwritten
+              continue
+            }
+            invoicePatch.set(open.id, { ...open, ...d.invoice, id: open.id, updatedAt: now(), emailGenerated: { subject: d.email.subject, body: d.email.body }, stale: false })
+            if (email) outreachPatch.set(email.id, { subject: d.email.subject, body: d.email.body, trigger: d.email.trigger, contactName: d.email.contactName, contactEmail: d.email.contactEmail, auto: d.email.auto })
+            counts.updated++
+            continue
+          }
+          let invId = d.invoice.id
+          for (let n = 2; taken.has(invId); n++) invId = `${d.invoice.id}-${n}`
+          taken.add(invId)
+          const oid = uid('M')
+          addOutreach.push({ ...d.email, id: oid, createdAt: now(), status: 'Draft', invoiceId: invId })
+          addInvoices.push({ ...d.invoice, id: invId, outreachId: oid, createdAt: now(), emailGenerated: { subject: d.email.subject, body: d.email.body } })
+          counts.created++
+        }
+        set((s) => ({
+          outreach: [...addOutreach, ...s.outreach.map((o) => (outreachPatch.has(o.id) ? { ...o, ...outreachPatch.get(o.id) } : o))],
+          invoices: [...addInvoices, ...s.invoices.map((i) => invoicePatch.get(i.id) ?? i)],
+        }))
+        return counts
+      },
+      refreshPriceDrafts: () => {
+        const st = get()
+        const open = st.invoices.filter((i) => i.status === 'Draft')
+        if (!open.length) return
+        const outreachPatch = new Map<string, Partial<Outreach>>()
+        const invoicePatch = new Map<string, Invoice>()
+        for (const inv of open) {
+          const a = st.accounts.find((x) => x.id === inv.accountId)
+          const email = st.outreach.find((o) => o.id === inv.outreachId)
+          const r = a ? rankFromState(st, a) : null
+          const d = r && draftPriceChange(r)
+          const edited = !!email && (email.subject !== inv.emailGenerated.subject || email.body !== inv.emailGenerated.body)
+          if (!d || edited) {
+            invoicePatch.set(inv.id, { ...inv, stale: true })
+            continue
+          }
+          invoicePatch.set(inv.id, { ...inv, ...d.invoice, id: inv.id, updatedAt: now(), emailGenerated: { subject: d.email.subject, body: d.email.body }, stale: false })
+          if (email) outreachPatch.set(email.id, { subject: d.email.subject, body: d.email.body, trigger: d.email.trigger, auto: d.email.auto })
+        }
+        set((s) => ({
+          outreach: s.outreach.map((o) => (outreachPatch.has(o.id) ? { ...o, ...outreachPatch.get(o.id) } : o)),
+          invoices: s.invoices.map((i) => invoicePatch.get(i.id) ?? i),
+        }))
+      },
+      approvePriceChange: (outreachId) => {
+        const st = get()
+        const o = st.outreach.find((x) => x.id === outreachId)
+        const inv = o?.invoiceId ? st.invoices.find((i) => i.id === o.invoiceId) : undefined
+        if (!o || !inv || o.status !== 'Draft' || inv.status !== 'Draft') return
+        st.sendOutreach(o.id)
+        const pct = inv.previousTotal ? (inv.total / inv.previousTotal - 1) * 100 : 0
+        set((s) => ({
+          invoices: s.invoices.map((i) => (i.id === inv.id ? { ...i, status: 'Sent', sentAt: now() } : i)),
+          priceProposals: { ...s.priceProposals, [inv.accountId]: { pct, effectiveDate: inv.issueDate, createdAt: now() } },
+        }))
+        get().log(inv.accountId, 'Pricing', `Price change approved: +${pct.toFixed(1)}% from ${new Date(inv.issueDate).toLocaleDateString()}. Invoice ${inv.id} ($${inv.total.toLocaleString('en-US')}/mo) sent with the notice email.`)
+      },
+      skipOutreach: (id) => {
+        const o = get().outreach.find((x) => x.id === id)
+        if (!o) return
+        set((s) => ({
+          outreach: s.outreach.map((x) => (x.id === id ? { ...x, status: 'Skipped' } : x)),
+          invoices: o.invoiceId ? s.invoices.map((i) => (i.id === o.invoiceId && i.status === 'Draft' ? { ...i, status: 'Void' } : i)) : s.invoices,
+        }))
+      },
       toast: null,
       notify: (t) => set({ toast: { ...t, id: uid('T') } }),
       dismissToast: () => set({ toast: null }),
@@ -367,14 +520,21 @@ export const useCrm = create<CrmState>()(
         }))
         get().log(c.accountId, 'Contract', `Contract ${c.id} signed. Opportunity closed won.`)
       },
-      resetAll: () => set({ ...initial(), toast: null }),
+      resetAll: () => {
+        applyPriceList({})
+        set({ ...initial(), toast: null })
+      },
     }),
     {
       name: 'herdbook-crm',
       version: SEED_VERSION,
       storage: createJSONStorage(() => localStorage),
       migrate: (persisted, version) => migrateState(persisted, version) as unknown as CrmState,
-      partialize: (s) => ({ accounts: s.accounts, contracts: s.contracts, opportunities: s.opportunities, outreach: s.outreach, activities: s.activities, reviews: s.reviews, decisions: s.decisions, chats: s.chats, autoSend: s.autoSend, priceProposals: s.priceProposals, grantApplications: s.grantApplications, grantTriggered: s.grantTriggered }),
+      partialize: (s) => ({ accounts: s.accounts, contracts: s.contracts, opportunities: s.opportunities, outreach: s.outreach, activities: s.activities, reviews: s.reviews, decisions: s.decisions, chats: s.chats, autoSend: s.autoSend, priceProposals: s.priceProposals, grantApplications: s.grantApplications, grantTriggered: s.grantTriggered, pricingModel: s.pricingModel, priceList: s.priceList, invoices: s.invoices }),
+      // The saved price list replaces the base list prices everywhere they're read.
+      onRehydrateStorage: () => (state) => {
+        if (state?.priceList) applyPriceList(state.priceList)
+      },
     },
   ),
 )

@@ -27,6 +27,14 @@ export const PRODUCTS: Product[] = [
 
 export const PRODUCT: Record<string, Product> = Object.fromEntries(PRODUCTS.map((p) => [p.id, p]))
 
+// The price list is editable on the Pricing page. Seed data is generated at the base
+// prices; the user's list is applied on top, and everything that reads listPrice follows.
+const BASE_LIST: Record<string, number> = Object.fromEntries(PRODUCTS.map((p) => [p.id, p.listPrice]))
+export const baseListPrice = (id: string) => BASE_LIST[id]
+export function applyPriceList(prices: Record<string, number>) {
+  for (const p of PRODUCTS) p.listPrice = prices[p.id] ?? BASE_LIST[p.id]
+}
+
 export const SEGMENT_FIT: Record<Segment, string[]> = {
   'Sow Farm': ['herdtrack', 'healthwatch', 'barnsense', 'tracelink', 'feedopt'],
   'Wean-to-Finish': ['herdtrack', 'barnsense', 'feedopt', 'healthwatch'],

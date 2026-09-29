@@ -222,6 +222,43 @@ export interface Outreach {
   auto: boolean
   /** The contract this email introduces (Lucas the Hog drafts). */
   contractId?: string
+  /** The invoice this price-change email goes out with (Pricing rank drafts). */
+  invoiceId?: string
+}
+
+export interface InvoiceLine {
+  productId: string
+  description: string
+  units: number
+  unitLabel: string
+  unitPrice: number
+  previousUnitPrice: number
+  listPrice: number
+  amount: number
+}
+/** A pre-drafted invoice. It only goes out with its email, after someone approves both. */
+export interface Invoice {
+  id: string
+  accountId: string
+  status: 'Draft' | 'Sent' | 'Void'
+  issueDate: string
+  dueDate: string
+  periodStart: string
+  periodEnd: string
+  paymentTerms: string
+  billTo: { name: string; contact: string; email: string; location: string }
+  lines: InvoiceLine[]
+  total: number
+  previousTotal: number
+  memo: string
+  outreachId: string
+  createdAt: string
+  updatedAt?: string
+  sentAt?: string
+  /** The email as last generated. While the email still matches, it follows pricing model changes. */
+  emailGenerated: { subject: string; body: string }
+  /** Set when the pricing model no longer calls for this change. */
+  stale?: boolean
 }
 
 export interface Activity {

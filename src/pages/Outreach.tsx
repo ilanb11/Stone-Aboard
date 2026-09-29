@@ -1,12 +1,13 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { AlertOctagon, Send, Sparkles, X } from 'lucide-react'
+import { AlertOctagon, FileText, Send, Sparkles, X } from 'lucide-react'
 import { useBook } from '../lib/useData'
 import { useCrm } from '../store'
 import type { Outreach, OutreachStatus } from '../types'
 import { PLAYBOOK, PLAYBOOKS } from '../lib/outreach'
 import { aiRewriteOutreach } from '../lib/lucas'
-import { Button, Card, Chip, PageHeader, StatusBadge, Tabs, TextLink, inputClass } from '../components/ui'
+import { Button, Card, Chip, PageHeader, Pill, StatusBadge, Tabs, TextLink, inputClass } from '../components/ui'
+import { InvoicePreview } from '../components/InvoicePreview'
 import { relDays } from '../lib/format'
 
 // Editor fields share the design-system field style; the textarea sizes by rows instead of a fixed height.
@@ -26,6 +27,9 @@ function Item({ o }: { o: Outreach }) {
   const update = useCrm((s) => s.updateOutreach)
   const send = useCrm((s) => s.sendOutreach)
   const approveDraft = useCrm((s) => s.approveDraft)
+  const approvePriceChange = useCrm((s) => s.approvePriceChange)
+  const skipOutreach = useCrm((s) => s.skipOutreach)
+  const invoice = useCrm((s) => (o.invoiceId ? s.invoices.find((i) => i.id === o.invoiceId) : undefined))
   const [open, setOpen] = useState(o.status === 'Draft')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -39,7 +43,8 @@ function Item({ o }: { o: Outreach }) {
           <button className="block w-full text-left" aria-expanded={open} onClick={() => setOpen(!open)}>
             <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
               <StatusBadge tone={tone}>{o.status}</StatusBadge>
-              <Chip>{o.contractId ? 'Contract email (Lucas the Hog)' : PLAYBOOK[o.playbook]?.name ?? 'Price notice'}</Chip>
+              <Chip>{o.contractId ? 'Contract email (Lucas the Hog)' : o.invoiceId ? 'Price change and invoice' : PLAYBOOK[o.playbook]?.name ?? 'Price notice'}</Chip>
+              {invoice && <span className="inline-flex items-center gap-1 text-[13px] text-ink-2"><FileText size={12} aria-hidden /> ${invoice.total.toLocaleString('en-US', { maximumFractionDigits: 0 })}/mo invoice</span>}
               {o.auto && <Chip tone="dim">Auto</Chip>}
               <span className="text-[13px] text-muted">{o.trigger}</span>
               <span className="meta text-muted">{relDays(o.sentAt ?? o.createdAt)}</span>
@@ -55,11 +60,19 @@ function Item({ o }: { o: Outreach }) {
         </div>
         {o.status === 'Draft' && (
           <div className="flex shrink-0 flex-wrap gap-2">
-            <Button size="sm" variant="ghost" onClick={() => update(o.id, { status: 'Skipped' })}><X size={12} /> Skip</Button>
-            <Button size="sm" variant="primary" onClick={() => (o.contractId ? approveDraft(o.contractId) : send(o.id))} title={o.contractId ? 'Approves the contract and sends this email' : undefined}><Send size={12} /> Approve and send</Button>
+            <Button size="sm" variant="ghost" onClick={() => skipOutreach(o.id)} title={invoice ? 'Skips the email and voids its invoice' : undefined}><X size={12} /> Skip</Button>
+            <Button size="sm" variant="primary" onClick={() => (o.contractId ? approveDraft(o.contractId) : invoice ? approvePriceChange(o.id) : send(o.id))} title={o.contractId ? 'Approves the contract and sends this email' : invoice ? 'Sends this email with its invoice' : undefined}><Send size={12} /> {invoice ? 'Approve and send both' : 'Approve and send'}</Button>
           </div>
         )}
       </div>
+      {open && invoice?.stale && o.status === 'Draft' && (
+        <div role="alert" className="mt-4 flex items-start gap-2.5 rounded-[14px] bg-accent-soft px-4 py-3 text-[14px] text-ink">
+          <AlertOctagon size={14} strokeWidth={2.25} className="mt-[3px] shrink-0 text-serious" aria-hidden />
+          <span className="min-w-0">
+            The pricing model changed after this draft {o.body !== invoice.emailGenerated.body || o.subject !== invoice.emailGenerated.subject ? 'and the email was edited by hand, so neither was updated' : 'and no longer calls for a price change for this account'}. Check the numbers, redraft it from <Link to="/pricing" className="underline underline-offset-4">Pricing rank</Link>, or skip it.
+          </span>
+        </div>
+      )}
       {open && (
         <div className="mt-4">
           {o.status === 'Draft' ? (
@@ -92,6 +105,12 @@ function Item({ o }: { o: Outreach }) {
           ) : (
             <pre className="max-w-[72ch] whitespace-pre-wrap rounded-[14px] bg-accent-soft p-4 font-sans text-[14px] leading-relaxed text-ink">{o.body}</pre>
           )}
+          {invoice && (
+            <div className="mt-4 max-w-3xl">
+              <div className="mb-2 text-[13px] text-ink-2">Attached invoice{o.status === 'Draft' ? ' (sent only with this email, on approval)' : ''}</div>
+              <InvoicePreview inv={invoice} />
+            </div>
+          )}
         </div>
       )}
     </li>
@@ -114,15 +133,18 @@ export default function OutreachPage() {
   const setAutoSend = useCrm((s) => s.setAutoSend)
   const [params] = useSearchParams()
   const accountFilter = params.get('account')
+  const [kind, setKind] = useState<'all' | 'price'>(params.get('kind') === 'price' ? 'price' : 'all')
   const [tab, setTab] = useState<OutreachStatus | 'All'>(accountFilter ? 'All' : 'Draft')
-  const list = useMemo(() => outreach.filter((o) => (tab === 'All' || o.status === tab) && (!accountFilter || o.accountId === accountFilter)).sort((a, b) => (b.sentAt ?? b.createdAt).localeCompare(a.sentAt ?? a.createdAt)), [outreach, tab, accountFilter])
-  const count = (s: OutreachStatus) => outreach.filter((o) => o.status === s && (!accountFilter || o.accountId === accountFilter)).length
+  const inScope = (o: Outreach) => (!accountFilter || o.accountId === accountFilter) && (kind === 'all' || !!o.invoiceId)
+  const list = outreach.filter((o) => (tab === 'All' || o.status === tab) && inScope(o)).sort((a, b) => (b.sentAt ?? b.createdAt).localeCompare(a.sentAt ?? a.createdAt))
+  const count = (s: OutreachStatus) => outreach.filter((o) => o.status === s && inScope(o)).length
+  const priceDrafts = outreach.filter((o) => o.invoiceId && o.status === 'Draft').length
 
   return (
     <div>
       <PageHeader
         title="Automated outreach"
-        subtitle="Org changes start playbook messages. Drafts wait for your approval unless auto-send is on for that playbook. Sending is simulated in this demo."
+        subtitle="Org changes start playbook messages, and Pricing rank adds price-change emails with their invoices. Drafts wait for your approval unless auto-send is on for that playbook (price changes and contract emails never auto-send). Sending is simulated in this demo."
       />
       {accountFilter && (
         <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-[14px] text-ink-2">
@@ -147,6 +169,10 @@ export default function OutreachPage() {
                 { value: 'All', label: <TabLabel label="All" /> },
               ]}
             />
+            <div className="-mt-2 mb-4 flex flex-wrap gap-1.5" role="group" aria-label="Message type">
+              <Pill active={kind === 'all'} onClick={() => setKind('all')}>Every message</Pill>
+              <Pill active={kind === 'price'} onClick={() => setKind('price')}>Price changes with invoices{priceDrafts ? ` · ${priceDrafts} waiting` : ''}</Pill>
+            </div>
           </div>
           {list.length > 0 && <ul className="divide-y divide-line border-t border-line">{list.slice(0, 100).map((o) => <Item key={o.id} o={o} />)}</ul>}
           {!list.length && <div className="border-t border-line px-5 py-10 text-center text-[14px] text-muted">{EMPTY[tab]}</div>}
