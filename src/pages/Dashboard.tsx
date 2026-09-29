@@ -105,8 +105,8 @@ export default function Dashboard() {
           title="Top-ranked opportunities"
           pad={false}
           action={
-            <Link to="/opportunities">
-              <TextLink>All ranked</TextLink>
+            <Link to="/pipeline?view=table&sort=prob">
+              <TextLink>Pipeline Review</TextLink>
             </Link>
           }
         >
@@ -126,7 +126,7 @@ export default function Dashboard() {
                 </div>
                 <div className="shrink-0 text-right">
                   <div className="tabular text-[15px] text-ink">{money(r.arr)}</div>
-                  <div className="meta mt-0.5 text-muted">Score {r.priority}</div>
+                  <div className="meta mt-0.5 text-muted">{r.opp ? `${r.priority}% win probability` : `Score ${r.priority}`}</div>
                 </div>
               </li>
             ))}
@@ -136,7 +136,7 @@ export default function Dashboard() {
         <Card
           title="Pipeline by stage"
           action={
-            <Link to="/opportunities?view=board">
+            <Link to="/pipeline?view=board">
               <TextLink>Open board</TextLink>
             </Link>
           }
@@ -145,9 +145,9 @@ export default function Dashboard() {
             data={m.byStage.map((s) => ({
               key: s.st,
               label: (
-                <span>
+                <Link to={`/pipeline?view=table&stage=${encodeURIComponent(s.st)}`} className={nameLink} aria-label={`${s.st}: ${s.n} deals, open in Pipeline Review`}>
                   {s.st} <span className="tabular text-muted">{s.n}</span>
-                </span>
+                </Link>
               ),
               value: s.v,
               display: money(s.v),

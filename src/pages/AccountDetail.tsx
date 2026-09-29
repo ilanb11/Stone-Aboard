@@ -47,7 +47,7 @@ export default function AccountDetail() {
 
   const sigs = signalsByAccount[a.id] ?? []
   const contract = a.contractId ? book.contractById[a.contractId] : undefined
-  const negotiation = book.contracts.find((c) => c.accountId === a.id && c.status === 'In Negotiation')
+  const negotiation = book.contracts.find((c) => c.accountId === a.id && c.status === 'In Negotiation') ?? book.contracts.find((c) => c.accountId === a.id && c.status === 'Draft')
   const opps = book.opportunities.filter((o) => o.accountId === a.id)
   const acts = activities.filter((x) => x.accountId === a.id).sort((x, y) => y.date.localeCompare(x.date))
   const mails = outreach.filter((o) => o.accountId === a.id)

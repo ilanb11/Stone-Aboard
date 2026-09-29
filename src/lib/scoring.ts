@@ -30,6 +30,9 @@ export interface RankedOpp {
   reasons: string[]
 }
 
+/** Win probability (0..1) for a ranked deal: the score shown on the home page, read as a probability. */
+export const winProbability = (r: Pick<RankedOpp, 'priority'>) => Math.max(0, Math.min(1, r.priority / 100))
+
 export function rankOpportunities(
   opps: Opportunity[],
   accounts: Record<string, Account>,

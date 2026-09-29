@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { AlertOctagon, AlertTriangle, ArrowLeft, CheckCircle2, Copy, Download, Loader2, Mail, SendHorizonal, Sparkles } from 'lucide-react'
 import { useBook } from '../lib/useData'
+import LucasDraft from './LucasDraft'
 import { useCrm, type Decision } from '../store'
 import { CLAUSES, CLAUSE, renderClause } from '../data/contracts'
 import { chatWithLucas, dealContext, lucasStatus, reviewContract, type LucasItem } from '../lib/lucas'
@@ -126,6 +127,8 @@ export default function LucasWorkspace() {
         </Link>
       </Empty>
     )
+  // Contracts Lucas drafted open in the review screen until they're approved and sent.
+  if (c.status === 'Draft') return <LucasDraft contract={c} />
   const a = book.byId[c.accountId]
   const opp = book.opportunities.find((o) => o.contractId === c.id)
   const review = reviews[c.id]

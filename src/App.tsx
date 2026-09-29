@@ -1,29 +1,37 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { BadgeDollarSign, FileSignature, Flame, LayoutDashboard, Map as MapIcon, Menu, Newspaper, Search, Send, Users, X } from 'lucide-react'
+import { BadgeDollarSign, FileSignature, KanbanSquare, LayoutDashboard, Map as MapIcon, Menu, Newspaper, Search, Send, Users, X } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import HeatMap from './pages/HeatMap'
 import Accounts from './pages/Accounts'
 import AccountDetail from './pages/AccountDetail'
-import Opportunities from './pages/Opportunities'
+import Pipeline from './pages/Pipeline'
 import Signals from './pages/Signals'
 import OutreachPage from './pages/Outreach'
 import Pricing from './pages/Pricing'
 import Contracts from './pages/Contracts'
 import LucasWorkspace from './pages/LucasWorkspace'
+import GrantDraft from './pages/GrantDraft'
 import { CURRENT_USER, useCrm } from './store'
+import { Toaster } from './components/Toaster'
 import { initials } from './lib/format'
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/map', label: 'Heat map', icon: MapIcon },
   { to: '/accounts', label: 'Accounts', icon: Users },
-  { to: '/opportunities', label: 'Opportunities', icon: Flame },
+  { to: '/pipeline', label: 'Pipeline Review', icon: KanbanSquare },
   { to: '/signals', label: 'Signals and newsletter', icon: Newspaper },
   { to: '/outreach', label: 'Automated outreach', icon: Send },
   { to: '/pricing', label: 'Pricing', icon: BadgeDollarSign },
   { to: '/contracts', label: 'Lucas the Hog', icon: FileSignature },
 ]
+
+/** Old Opportunities links (bookmarks, ?view=board) land on Pipeline Review with their query intact. */
+function LegacyPipelineRedirect() {
+  const { search } = useLocation()
+  return <Navigate to={`/pipeline${search}`} replace />
+}
 
 function GlobalSearch() {
   const accounts = useCrm((s) => s.accounts)
@@ -88,6 +96,10 @@ export default function App() {
     setMenu(false)
     document.getElementById('main')?.scrollTo(0, 0)
   }, [loc.pathname])
+  // New regional rule changes get their grant applications pre-drafted once (never submitted).
+  useEffect(() => {
+    useCrm.getState().runGrantTrigger()
+  }, [])
 
   return (
     <div className="flex h-full bg-page">
@@ -138,6 +150,7 @@ export default function App() {
             <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-[12px] font-medium text-on-accent">{initials(CURRENT_USER)}</span>
           </div>
         </header>
+        <Toaster />
         <main id="main" className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-[1440px] px-4 pb-16 pt-8 sm:px-8">
             <Routes>
@@ -145,12 +158,14 @@ export default function App() {
               <Route path="/map" element={<HeatMap />} />
               <Route path="/accounts" element={<Accounts />} />
               <Route path="/accounts/:id" element={<AccountDetail />} />
-              <Route path="/opportunities" element={<Opportunities />} />
+              <Route path="/pipeline" element={<Pipeline />} />
+              <Route path="/opportunities" element={<LegacyPipelineRedirect />} />
               <Route path="/signals" element={<Signals />} />
               <Route path="/outreach" element={<OutreachPage />} />
               <Route path="/pricing" element={<Pricing />} />
               <Route path="/contracts" element={<Contracts />} />
               <Route path="/contracts/:id" element={<LucasWorkspace />} />
+              <Route path="/grants/:id" element={<GrantDraft />} />
               {/* Old links (for example the removed /weather tab) land on the dashboard. */}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

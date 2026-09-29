@@ -25,6 +25,7 @@ function Item({ o }: { o: Outreach }) {
   const book = useBook()
   const update = useCrm((s) => s.updateOutreach)
   const send = useCrm((s) => s.sendOutreach)
+  const approveDraft = useCrm((s) => s.approveDraft)
   const [open, setOpen] = useState(o.status === 'Draft')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -38,7 +39,7 @@ function Item({ o }: { o: Outreach }) {
           <button className="block w-full text-left" aria-expanded={open} onClick={() => setOpen(!open)}>
             <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
               <StatusBadge tone={tone}>{o.status}</StatusBadge>
-              <Chip>{PLAYBOOK[o.playbook]?.name ?? 'Price notice'}</Chip>
+              <Chip>{o.contractId ? 'Contract email (Lucas the Hog)' : PLAYBOOK[o.playbook]?.name ?? 'Price notice'}</Chip>
               {o.auto && <Chip tone="dim">Auto</Chip>}
               <span className="text-[13px] text-muted">{o.trigger}</span>
               <span className="meta text-muted">{relDays(o.sentAt ?? o.createdAt)}</span>
@@ -55,7 +56,7 @@ function Item({ o }: { o: Outreach }) {
         {o.status === 'Draft' && (
           <div className="flex shrink-0 flex-wrap gap-2">
             <Button size="sm" variant="ghost" onClick={() => update(o.id, { status: 'Skipped' })}><X size={12} /> Skip</Button>
-            <Button size="sm" variant="primary" onClick={() => send(o.id)}><Send size={12} /> Approve and send</Button>
+            <Button size="sm" variant="primary" onClick={() => (o.contractId ? approveDraft(o.contractId) : send(o.id))} title={o.contractId ? 'Approves the contract and sends this email' : undefined}><Send size={12} /> Approve and send</Button>
           </div>
         )}
       </div>

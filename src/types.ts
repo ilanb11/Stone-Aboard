@@ -79,7 +79,8 @@ export interface Contract {
   id: string
   accountId: string
   template: string
-  status: 'Active' | 'In Negotiation' | 'Expired'
+  /** Draft: prepared by Lucas the Hog, not yet approved or sent to the customer. */
+  status: 'Draft' | 'Active' | 'In Negotiation' | 'Expired'
   start: string
   end: string
   termMonths: number
@@ -96,6 +97,23 @@ export interface Contract {
   assignmentOnChangeOfControl: 'Consent required' | 'Permitted with notice'
   redlines: Redline[]
   opportunityId?: string
+  /** Proposed products and prices (drafted contracts). */
+  orderForm?: OrderLine[]
+  /** Present on contracts Lucas the Hog drafted. */
+  draft?: {
+    by: 'Lucas the Hog'
+    at: string
+    opportunityId: string
+    emailId: string
+    approvedAt?: string
+  }
+}
+
+export interface OrderLine {
+  productId: string
+  units: number
+  unitPrice: number // monthly, per unit
+  listPrice: number
 }
 
 export interface Redline {
@@ -131,6 +149,10 @@ export interface Opportunity {
   contractId?: string
   /** Why a deal was lost or put on ice. */
   reason?: string
+  /** Set the first time the deal reaches Negotiation; Lucas the Hog drafts only then. */
+  negotiationStartedAt?: string
+  /** Last stage change. Seeded deals have no history, so readers fall back to createdAt. */
+  stageChangedAt?: string
 }
 
 export type SignalType =
@@ -151,8 +173,35 @@ export interface Signal {
   detail: string
   accountId?: string
   state?: string
+  /** Geography tags: region from the state; county for account signals (market-wide rules are statewide). */
+  region?: RegionName
+  county?: string
   severity: 'High' | 'Medium' | 'Low'
   source: string
+}
+
+export interface GrantPracticeLine {
+  code?: string
+  name: string
+  units: number
+  unit: 'site' | 'barn' | 'bin' | '1k head' | '100 acres' | 'operation'
+  unitCost: number
+}
+export type GrantSectionId = 'applicant' | 'operation' | 'need' | 'project' | 'budget' | 'records'
+/** A grant application Herdbook pre-drafted for an account. Only people submit applications. */
+export interface GrantApplication {
+  id: string
+  grantId: string
+  accountId: string
+  /** The regulatory changes that prompted it. */
+  signalIds: string[]
+  status: 'Draft' | 'Reviewed'
+  createdAt: string
+  updatedAt?: string
+  reviewedAt?: string
+  practices: GrantPracticeLine[]
+  /** Hand edits to generated sections. Sections without an edit follow the CRM data. */
+  edits?: Partial<Record<GrantSectionId, string>>
 }
 
 export type OutreachStatus = 'Draft' | 'Approved' | 'Sent' | 'Skipped'
@@ -171,6 +220,8 @@ export interface Outreach {
   createdAt: string
   sentAt?: string
   auto: boolean
+  /** The contract this email introduces (Lucas the Hog drafts). */
+  contractId?: string
 }
 
 export interface Activity {

@@ -25,6 +25,7 @@ function mulberry32(seed: number) {
 const BASE_SEED = 4172026
 const SPREAD_SEED = 20260930
 const GRAIN_SEED = 7310511
+const PIPELINE_SEED = 1162027
 let rng = mulberry32(BASE_SEED)
 const rand = (lo = 0, hi = 1) => lo + rng() * (hi - lo)
 const randInt = (lo: number, hi: number) => Math.floor(rand(lo, hi + 1))
@@ -518,7 +519,7 @@ export interface Dataset {
   activities: Activity[]
 }
 
-export const SEED_VERSION = 14
+export const SEED_VERSION = 16
 
 const LOST_REASONS = ['Lost to a competitor on price', 'Stayed with spreadsheets', 'No budget this year', "Chose their integrator's system", 'Decision maker left before signing']
 const ON_ICE_REASONS = ['Budget frozen until after harvest', 'Waiting on integrator approval', 'Paused after a herd health break', 'Revisit after the lender review', 'Champion left the company', 'Revisit next budget cycle']
@@ -564,6 +565,7 @@ export function generateDataset(n = 900, grainCount = 240): Dataset {
     const id = `O${String(opportunities.length + 1).padStart(4, '0')}`
     const o: Opportunity = { id, accountId: a.id, type, stage, arr: Math.round(arr), products, owner: a.rep, createdAt: iso(-randInt(5, 200)), closeDate: iso(isClosedStage(stage) ? -randInt(1, 120) : randInt(10, 160)) }
     if (stage === 'Negotiation') {
+      o.negotiationStartedAt = o.createdAt
       const c: Contract = { ...makeContract(a, contracts.length), status: 'In Negotiation', start: iso(randInt(15, 45)), template: TEMPLATE_VERSION, redlines: redlinesFor(a, ownershipAccounts.has(a.id)), opportunityId: id }
       c.end = new Date(new Date(c.start).getTime() + c.termMonths * 30.4 * DAY).toISOString()
       contracts.push(c)
@@ -699,6 +701,41 @@ export function generateDataset(n = 900, grainCount = 240): Dataset {
   for (const a of sample(grain.filter((g) => g.status === 'Customer'), 18)) addWonHistory(a)
   addOutreach(grainSignals, Object.fromEntries(grain.map((a) => [a.id, a])))
   addActivities(grain, ['Pre-harvest check-in. Yield maps syncing from the combine.', 'Walked the farm manager through bin alerts.', 'Discussed adding the leased ground to FieldTrack.', 'Support ticket on a bin sensor resolved.', 'Owner asked for a nitrogen report by field.'])
+
+  // Pass 4: pipeline history, on its own stream. Every deal gets the date it entered its
+  // stage, reps have recent contact on most open deals, and a few deals slipped past
+  // their expected close, so Pipeline Review's stale and past-due flags have real cases.
+  rng = mulberry32(PIPELINE_SEED)
+  const accountById = Object.fromEntries(accounts.map((a) => [a.id, a]))
+  const noteById = Object.fromEntries(activities.map((v) => [v.id, v]))
+  const worked = new Set<string>()
+  const today = iso(0)
+  for (const o of opportunities) {
+    if (isClosedStage(o.stage)) {
+      o.stageChangedAt = o.closeDate < today ? o.closeDate : today
+      // A deal is created before it closes.
+      if (o.createdAt > o.stageChangedAt) o.createdAt = new Date(new Date(o.stageChangedAt).getTime() - randInt(20, 90) * DAY).toISOString()
+      continue
+    }
+    // Prospects sit where they were created; later stages moved some time after.
+    const created = new Date(o.createdAt).getTime()
+    o.stageChangedAt = o.stage === 'Prospect' ? o.createdAt : new Date(created + (TODAY.getTime() - created) * rand(0.25, 0.95)).toISOString()
+    if (o.stage === 'Negotiation') o.negotiationStartedAt = o.stageChangedAt
+    if (o.stage === 'On Ice') continue
+    if (chance(0.09)) o.closeDate = iso(-randInt(2, 40))
+    const a = accountById[o.accountId]
+    if (worked.has(a.id)) continue
+    worked.add(a.id)
+    a.lastContact = chance(0.8) ? iso(-randInt(1, 21)) : iso(-randInt(32, 80))
+    if (noteById[`V-${a.id}`]) noteById[`V-${a.id}`].date = a.lastContact
+  }
+
+  // Geography tags on every signal: region from the state; county for account signals
+  // (market-wide rules and outbreaks are statewide).
+  for (const s of signals) {
+    if (s.state) s.region = STATES[s.state]?.region
+    if (s.accountId) s.county = accountById[s.accountId]?.county
+  }
 
   signals.sort((a, b) => b.date.localeCompare(a.date))
   return { accounts, contracts, opportunities, signals, outreach, activities }

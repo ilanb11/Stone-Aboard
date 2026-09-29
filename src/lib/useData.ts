@@ -3,13 +3,18 @@ import type { Account, Contract, Opportunity, Signal } from '../types'
 import { dataset, useCrm } from '../store'
 import { analyzePricing, type PricingAnalysis } from './pricing'
 import { rankOpportunities, type RankedOpp } from './scoring'
+import { lawChangesFrom, type RegulatoryChange } from './grants'
 
-// Weather (src/lib/weather.ts, Open-Meteo) is intentionally not loaded here any more:
-// no page shows it right now. The integration is kept for the newsletter to reuse.
+// Weather (src/lib/weather.ts, Open-Meteo) loads on demand in Signals and newsletter
+// (src/lib/weatherImpact.ts), not here, so other pages never wait on it.
 
 export const signals: Signal[] = dataset.signals
 export const signalsByAccount: Record<string, Signal[]> = {}
 for (const s of signals) if (s.accountId) (signalsByAccount[s.accountId] ??= []).push(s)
+
+/** Regional regulatory and law changes (market-wide Regulatory signals) with their grant mapping. */
+export const lawChanges: RegulatoryChange[] = lawChangesFrom(signals)
+export const lawChangeBySignal: Record<string, RegulatoryChange> = Object.fromEntries(lawChanges.map((c) => [c.signal.id, c]))
 
 export interface Book {
   accounts: Account[]

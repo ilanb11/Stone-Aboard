@@ -130,6 +130,32 @@
   color-scheme: dark;
 }
 
+/* Heat-map density ramp (light to intense). Plain :root so the canvas can always
+   resolve it, whether or not a utility class references it. */
+:root {
+  --color-heat-1: #cdf2ae;
+  --color-heat-2: #c7ff9f;
+  --color-heat-3: #7fd14f;
+  --color-heat-4: #3a8f23;
+  --color-heat-5: #174f10;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --color-heat-1: #173a10;
+    --color-heat-2: #2d6a1b;
+    --color-heat-3: #5fb33a;
+    --color-heat-4: #a8e87c;
+    --color-heat-5: #e2ffd0;
+  }
+}
+:root[data-theme='dark'] {
+  --color-heat-1: #173a10;
+  --color-heat-2: #2d6a1b;
+  --color-heat-3: #5fb33a;
+  --color-heat-4: #a8e87c;
+  --color-heat-5: #e2ffd0;
+}
+
 html,
 body,
 #root {

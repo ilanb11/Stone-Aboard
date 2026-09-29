@@ -11,6 +11,8 @@ export interface DayForecast {
   precip: number // mm
   snow: number // cm
   wind: number // km/h max
+  gust?: number // km/h max gust
+  et0?: number // mm reference evapotranspiration (FAO-56)
 }
 
 export interface WeatherState {
@@ -143,6 +145,119 @@ export function loadWeather(accounts: Account[]): Promise<WeatherState> {
       return cache
     })
   return inflight
+}
+
+// ---------- any set of points (counties, farms) ----------
+
+export interface ForecastPoint {
+  key: string
+  lat: number
+  lon: number
+}
+export interface DailySeries {
+  source: WeatherState['source']
+  fetchedAt: string
+  /** Includes pastDays of history before today, then the forecast. */
+  byKey: Record<string, DayForecast[]>
+}
+
+const DAILY_VARS = 'temperature_2m_max,temperature_2m_min,relative_humidity_2m_min,precipitation_sum,snowfall_sum,wind_speed_10m_max,wind_gusts_10m_max,et0_fao_evapotranspiration'
+const CHUNK = 100 // locations per request keeps URLs well under common limits
+const CACHE_MS = 3 * 3600 * 1000
+const seriesCache = new Map<string, Promise<DailySeries>>()
+
+type OMDaily = Record<string, (number | null)[]> & { time: string[] }
+const parse = (d: OMDaily): DayForecast[] =>
+  d.time.map((t, j) => ({
+    date: t,
+    tmax: d.temperature_2m_max?.[j] ?? 20,
+    tmin: d.temperature_2m_min?.[j] ?? 10,
+    rh: d.relative_humidity_2m_min?.[j] ?? 45,
+    precip: d.precipitation_sum?.[j] ?? 0,
+    snow: d.snowfall_sum?.[j] ?? 0,
+    wind: d.wind_speed_10m_max?.[j] ?? 10,
+    gust: d.wind_gusts_10m_max?.[j] ?? undefined,
+    et0: d.et0_fao_evapotranspiration?.[j] ?? undefined,
+  }))
+
+async function requestSeries(points: ForecastPoint[], pastDays: number, forecastDays: number): Promise<Record<string, DayForecast[]>> {
+  const out: Record<string, DayForecast[]> = {}
+  for (let i = 0; i < points.length; i += CHUNK) {
+    const chunk = points.slice(i, i + CHUNK)
+    const url =
+      'https://api.open-meteo.com/v1/forecast?' +
+      new URLSearchParams({
+        latitude: chunk.map((p) => p.lat.toFixed(2)).join(','),
+        longitude: chunk.map((p) => p.lon.toFixed(2)).join(','),
+        daily: DAILY_VARS,
+        timezone: 'auto',
+        past_days: String(pastDays),
+        forecast_days: String(forecastDays),
+      })
+    const r = await fetch(url)
+    if (!r.ok) throw new Error(`Open-Meteo ${r.status}`)
+    const json = await r.json()
+    const arr: { daily: OMDaily }[] = Array.isArray(json) ? json : [json]
+    arr.forEach((loc, j) => (out[chunk[j].key] = parse(loc.daily)))
+  }
+  return out
+}
+
+/** Offline stand-in: a seasonal baseline by latitude with a few regional weather systems. */
+function modeledSeries(points: ForecastPoint[], pastDays: number, forecastDays: number): Record<string, DayForecast[]> {
+  const today = new Date()
+  const season = Math.cos(((today.getMonth() - 6.5) / 12) * 2 * Math.PI) // 1 in July, -1 in January
+  const week = Math.floor(today.getTime() / (7 * 86400000))
+  const out: Record<string, DayForecast[]> = {}
+  for (const p of points) {
+    const h = [...p.key].reduce((x, c) => (x * 31 + c.charCodeAt(0)) >>> 0, 7)
+    const hot = p.lat < 36 && (week + (h % 3)) % 3 === 0 // a southern heat ridge some weeks
+    const front = p.lat > 43 && (week + (h % 2)) % 2 === 0 // a northern cold front some weeks
+    const dry = p.lon < -100 && p.lat < 42 // dry southern plains and southwest
+    out[p.key] = Array.from({ length: pastDays + forecastDays }, (_, i) => {
+      const day = i - pastDays
+      const r = (((h ^ (i * 2654435761)) >>> 0) % 1000) / 1000
+      let tmax = 27 - (p.lat - 32) * 0.9 + season * 9 + (r - 0.5) * 8
+      if (hot && day >= 1 && day <= 4) tmax += 9
+      let tmin = tmax - 11 - r * 4
+      if (front && day >= 3 && day <= 4) tmin -= 13
+      const precip = dry && day < 0 ? 0 : r > 0.86 ? r * 40 : r * 3
+      const d = new Date(today.getTime() + day * 86400000).toISOString().slice(0, 10)
+      return { date: d, tmax, tmin, rh: 25 + r * 40, precip, snow: tmax < 0 && r > 0.7 ? r * 18 : 0, wind: 10 + r * 30, gust: 25 + r * 40, et0: Math.max(0.5, (tmax - 5) * 0.22) }
+    })
+  }
+  return out
+}
+
+/** Daily weather for any points: Open-Meteo when reachable, modeled otherwise. Cached for three hours. */
+export function loadDailySeries(points: ForecastPoint[], { pastDays = 30, forecastDays = 7 } = {}): Promise<DailySeries> {
+  const sig = `${pastDays}|${forecastDays}|${points.map((p) => p.key).join(',')}`
+  const hit = seriesCache.get(sig)
+  if (hit) return hit
+  const storeKey = `herdbook-weather:${pastDays}:${forecastDays}:${points.length}`
+  try {
+    const saved = JSON.parse(localStorage.getItem(storeKey) ?? 'null') as (DailySeries & { sig: string }) | null
+    if (saved && saved.sig === sig && Date.now() - new Date(saved.fetchedAt).getTime() < CACHE_MS) {
+      const p = Promise.resolve(saved)
+      seriesCache.set(sig, p)
+      return p
+    }
+  } catch {
+    // storage unavailable: fetch fresh
+  }
+  const p = (import.meta.env.VITE_ARTIFACT ? Promise.reject(new Error('offline demo')) : requestSeries(points, pastDays, forecastDays))
+    .then((byKey): DailySeries => {
+      const live: DailySeries = { source: 'Open-Meteo live forecast', fetchedAt: new Date().toISOString(), byKey }
+      try {
+        localStorage.setItem(storeKey, JSON.stringify({ ...live, sig }))
+      } catch {
+        // quota or privacy mode: keep it in memory only
+      }
+      return live
+    })
+    .catch((): DailySeries => ({ source: 'Modeled forecast (offline)', fetchedAt: new Date().toISOString(), byKey: modeledSeries(points, pastDays, forecastDays) }))
+  seriesCache.set(sig, p)
+  return p
 }
 
 export function useWeather(accounts: Account[]): WeatherState {
