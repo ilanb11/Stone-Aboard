@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Lock, Mail, RefreshCw } from 'lucide-react'
 import { useCrm } from '../store'
 import type { Outreach } from '../types'
@@ -68,11 +69,20 @@ export function LiveEmailCard() {
   )
 }
 
-/** One line next to a send button, so nobody sends a real email by surprise. */
+/** Next to every send button: says whether sending really emails the test inbox, so nobody sends "for real" by accident or by silence. */
 export function LiveEmailNote() {
   const on = useCrm((s) => s.liveEmail)
   const st = useMailStatus()
-  if (!on || !st?.configured || (st.needsPasscode && !st.unlocked)) return null
+  if (!st?.configured) return null
+  const locked = st.needsPasscode && !st.unlocked
+  if (!on || locked)
+    return (
+      <p role="status" className="rounded-[12px] bg-accent-soft px-3 py-2 text-[13px] text-ink">
+        {locked && on ? 'Real email is on, but this site is locked: enter the demo passcode' : 'Real email is off: sending only marks this as sent in the CRM, and no email goes out. Turn it on'}
+        {' in '}
+        <Link to="/outreach" className="underline underline-offset-4">Automated outreach</Link>.
+      </p>
+    )
   return (
     <p className="text-[13px] text-ink-2">
       Real email is on: sending also emails {st.to}{st.remaining ? ` (${st.remaining} of ${st.max} left)` : ''}.

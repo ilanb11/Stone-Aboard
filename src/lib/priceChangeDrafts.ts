@@ -2,7 +2,7 @@ import type { Account, Contract, Invoice, InvoiceLine, Outreach } from '../types
 import { STATES } from '../data/geo'
 import { PRODUCT, unitLabel } from '../data/products'
 import { pickContact } from './outreach'
-import { UNIT_WORD, repriceLines, unitMoney, type RepricedLine, type UnitRank } from './unitPricing'
+import { repriceLines, type RepricedLine, type UnitRank } from './unitPricing'
 import type { PricingAnalysis } from './pricing'
 
 // Price change at renewal: the email that explains it and the first invoice at the new
@@ -10,7 +10,6 @@ import type { PricingAnalysis } from './pricing'
 // and nothing goes out until someone approves it.
 
 const usd = (v: number) => `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-const whole = (v: number) => `$${Math.round(v).toLocaleString('en-US')}`
 const long = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 const addMonths = (iso: string, n: number) => {
   const d = new Date(iso)
@@ -101,12 +100,9 @@ export function draftPriceChange(r: UnitRank, today = new Date(), basis: 'target
   const rw = r.renewal
   const c = pickContact(a, ['CFO', 'Owner', 'GM'])
   const first = c.name.split(' ')[0]
-  const [one] = UNIT_WORD[r.volume.unit]
-  const units = UNIT_WORD[r.volume.unit][r.volume.qty === 1 ? 0 : 1]
   const curM = r.currentArr / 12
   const newM = r.renewalArr / 12
   const pct = (r.renewalArr / r.currentArr - 1) * 100
-  const newPerUnit = r.renewalArr / r.volume.qty
 
   const lines = invoiceLines(r.lines)
   const total = Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100
@@ -116,12 +112,12 @@ export function draftPriceChange(r: UnitRank, today = new Date(), basis: 'target
   const due = new Date(new Date(issue).getTime() + netDays(rw.paymentTerms) * 86400000).toISOString()
   const id = invoiceIdFor(a.id, issue)
 
-  const ahead = `Ahead of the ${rw.noticeDays}-day renewal notice window in the agreement, here is the pricing for the next term.`
+  // Short and plain: when the price starts, the new prices, the new total, and when to reply by.
   const when = rw.rolled
-    ? `Your agreement renews on current pricing on ${long(rw.termEnd)} because its notice window has passed, so this change takes effect at the following renewal on ${long(rw.date)}. ${ahead}`
+    ? `Your ThiboLiSoft agreement renews on ${long(rw.termEnd)} at your current pricing. Here is your pricing from the next renewal on ${long(rw.date)}:`
     : rw.pastNotice
-      ? `Your ThiboLiSoft agreement ends on ${long(rw.date)} and doesn't renew automatically, so here is the pricing for the next term.`
-      : `Your ThiboLiSoft agreement renews on ${long(rw.date)}. ${ahead}`
+      ? `Your ThiboLiSoft agreement ends on ${long(rw.date)} and doesn't renew automatically. Here is your pricing for the next term:`
+      : `Your ThiboLiSoft agreement renews on ${long(rw.date)}. Here is your pricing for the next term:`
   // Past the notice date (no auto-renew), questions can still come in until the term ends.
   const replyBy = rw.pastNotice ? `before ${long(rw.date)}` : `by ${long(rw.noticeBy)}`
   const body = [
@@ -129,19 +125,11 @@ export function draftPriceChange(r: UnitRank, today = new Date(), basis: 'target
     '',
     when,
     '',
-    // The target follows this account's own product and site mix, so it isn't a price for the whole segment.
-    `Today your subscription works out to ${unitMoney(r.currentPerUnit)} per ${one} a year across ${r.volume.qty.toLocaleString('en-US')} ${units}. ${
-      basis === 'catalog'
-        ? `At our standard price list, your products and sites come to ${unitMoney(r.targetPerUnit)} per ${one}${r.renewalArr < r.listArr - 1 ? ', and we are moving you part of the way this renewal' : ', and that is where your new rate lands'}`
-        : `For an operation with your products and sites, our target is ${unitMoney(r.targetPerUnit)} per ${one}${r.cappedAtList ? ', and your new rate stops at our standard list price' : ''}`
-    }. From ${long(rw.date)}, your subscription moves to ${usd(newM)} a month (${whole(r.renewalArr)} a year), up from ${usd(curM)}, a ${pct.toFixed(1)}% change. That's ${unitMoney(newPerUnit)} per ${one}.`,
-    '',
-    'What changes:',
     ...changeLines(lines),
     '',
-    `Everything else in the agreement stays the same. Your first invoice at the new rate is attached for reference: ${usd(total)}, dated ${long(issue)}, ${rw.paymentTerms.toLowerCase()}.`,
+    `Your monthly total moves from ${usd(curM)} to ${usd(newM)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%), starting ${long(rw.date)}. The invoice at the new rate is attached.`,
     '',
-    `Please reply ${replyBy} with any questions. I'm happy to walk through the numbers on a quick call, or look at an annual prepay.`,
+    `Questions? Reply ${replyBy} and I'll walk you through it.`,
     '',
     'Best,',
     a.rep,

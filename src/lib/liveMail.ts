@@ -84,6 +84,14 @@ export function useMailStatus(): MailStatus | null {
 const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const usd = (v: number) => `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
+/** Plain-text email as HTML paragraphs: mail clients ignore pre-wrap, so blank lines and line breaks are spelled out. */
+function htmlBody(text: string) {
+  return text
+    .split(/\n{2,}/)
+    .map((para) => `<p style="margin:0 0 12px">${esc(para).replace(/\n/g, '<br>')}</p>`)
+    .join('')
+}
+
 function invoiceHtml(inv: Invoice) {
   const rows = inv.lines
     .map((l) => `<tr><td style="padding:6px 8px;border-top:1px solid #e5e5e5">${esc(l.description)}${l.unitPrice !== l.previousUnitPrice ? `<div style="color:#777;font-size:12px">was ${usd(l.previousUnitPrice)}</div>` : ''}</td><td style="padding:6px 8px;border-top:1px solid #e5e5e5;text-align:right">${l.units.toLocaleString('en-US')}</td><td style="padding:6px 8px;border-top:1px solid #e5e5e5;text-align:right">${usd(l.unitPrice)}</td><td style="padding:6px 8px;border-top:1px solid #e5e5e5;text-align:right">${usd(l.amount)}</td></tr>`)
@@ -130,7 +138,7 @@ export async function deliverOutreach(outreachId: string): Promise<void> {
     const attachments = inv ? [{ filename: `Invoice ${inv.id}.pdf`, content: await toBase64(await invoicePdf(inv)) }] : []
     const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;color:#111;max-width:640px">
 <p style="font-size:12px;color:#777;border-bottom:1px solid #e5e5e5;padding-bottom:8px;margin:0 0 14px">${esc(note)}</p>
-<div style="white-space:pre-wrap">${esc(o.body)}</div>${inv ? invoiceHtml(inv) : ''}</div>`
+${htmlBody(o.body)}${inv ? invoiceHtml(inv) : ''}</div>`
     const r = await fetch('/api/mail/send', { method: 'POST', headers: { 'Content-Type': 'application/json', ...passHeader() }, body: JSON.stringify({ outreachId: o.id, subject: o.subject, text: `${note}\n\n${o.body}${inv ? `\n\nInvoice ${inv.id}: $${inv.total.toLocaleString('en-US')} a month (attached as a PDF).` : ''}`, html, attachments }) })
     const json = (await r.json().catch(() => ({}))) as { id?: string; to?: string; error?: string }
     if (!r.ok) throw new Error(json.error ?? `HTTP ${r.status}`)
