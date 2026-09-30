@@ -1,19 +1,14 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowUpRight, CloudSun, FileSignature, Flame, Landmark, Mail, Newspaper, Pencil, Plane, RotateCcw, Tags, TriangleAlert, Wallet } from 'lucide-react'
+import { ArrowUpRight, FileSignature, Flame, Mail, Pencil, RotateCcw, Tags, TriangleAlert, Wallet } from 'lucide-react'
 import { useBook, signals } from '../lib/useData'
 import { SEGMENT_FACTORS, useCrm } from '../store'
 import { OPP_STAGES, isOpenStage, type Opportunity } from '../types'
-import { STATES } from '../data/geo'
 import { money, num } from '../lib/format'
 import { winProbability } from '../lib/scoring'
 import { findReconnects } from '../lib/reconnects'
 import { rankCustomers } from '../lib/unitPricing'
-import { useWeatherImpact } from '../lib/weatherImpact'
 import { inputClass } from '../components/ui'
-import { weekStart } from './Signals'
-import { localDay } from '../lib/tripPlanner'
-import { purchaseLapse } from '../lib/grantDrafts'
 
 /** Default monthly sales target (booked ARR) until the user sets one. */
 export const DEFAULT_MONTHLY_TARGET = 125_000
@@ -123,13 +118,10 @@ export default function Dashboard() {
   const outreach = useCrm((s) => s.outreach)
   const activities = useCrm((s) => s.activities)
   const invoices = useCrm((s) => s.invoices)
-  const grants = useCrm((s) => s.grantApplications)
-  const trips = useCrm((s) => s.trips)
   const model = useCrm((s) => s.pricingModel)
   const priceList = useCrm((s) => s.priceList)
   // Email tracking (Lucas the Hog inbox): proposed contract changes waiting for a person.
   const mailToReview = useCrm((s) => s.mailProposals.filter((p) => p.status === 'Proposed' && !p.auto).length)
-  const impact = useWeatherImpact(book.accounts)
 
   const m = useMemo(() => {
     const now = Date.now()
@@ -162,26 +154,13 @@ export default function Dashboard() {
       const d = r.renewal ? new Date(r.renewal.termEnd).getTime() - now : -1
       return d >= 0 && d <= 90 * DAY && r.upliftArr >= 1
     })
-    // Rolling 7 days to match Signals' "Last 7 days"; the newsletter counts its own Monday-start issue.
-    const orgWeek = signals.filter((s) => s.type !== 'Regulatory' && now - new Date(s.date).getTime() < 7 * DAY)
-    const issueStart = weekStart(new Date(now)).getTime()
-    const issue = signals.filter((s) => new Date(s.date).getTime() >= issueStart)
     const negotiating = book.contracts.filter((c) => c.status === 'In Negotiation')
     const lucasDrafts = book.contracts.filter((c) => c.status === 'Draft')
-    return { open, weighted, won90, pastDue, stale, attention, byStage, reconnectsNow, renewals, issue, orgWeek, negotiating, lucasDrafts }
+    return { open, weighted, won90, pastDue, stale, attention, byStage, reconnectsNow, renewals, negotiating, lucasDrafts }
   }, [book, activities, model, priceList])
 
   const drafts = outreach.filter((o) => o.status === 'Draft')
   const priceDrafts = invoices.filter((i) => i.status === 'Draft').length
-  // R&D tax-credit notes aren't held to the 50% coverage rule, so they don't count as grants.
-  // Drafts whose purchase fell through (deal lost, account churned) no longer count.
-  const live = grants.filter((g) => g.status === 'Draft' && book.byId[g.accountId] && purchaseLapse(g, book.byId[g.accountId], book.opportunities) === null)
-  const grantDrafts = live.filter((g) => g.kind === 'Grant').length
-  const taxNotes = live.filter((g) => g.kind === 'Tax credit').length
-  const today = localDay()
-  const trip = trips.find((t) => t.end >= today)
-  const weather = impact.groups
-  const severe = weather.filter((g) => g.severity === 'Severe').length
 
   return (
     <div>
@@ -201,16 +180,9 @@ export default function Dashboard() {
         <Tile to="/pipeline?view=table&stage=Closed%20Won&close=closed90" icon={<Wallet size={14} />} label="Won in the last 90 days" value={money(m.won90.reduce((s, o) => s + o.arr, 0))} sub={`${num(m.won90.length)} ${m.won90.length === 1 ? 'deal' : 'deals'}`} />
         <Tile highlight to="/pricing" icon={<Tags size={14} />} label="Renewal price uplift" value={money(m.renewals.reduce((s, r) => s + r.upliftArr, 0))} sub={`${num(m.renewals.length)} renewals to notify in the next 90 days${priceDrafts ? ` · ${priceDrafts} drafts waiting` : ''}`} />
         <Tile to="/outreach" icon={<Mail size={14} />} label="Outreach awaiting approval" value={num(drafts.length)} sub={drafts.length ? `${num(drafts.filter((o) => o.invoiceId).length)} price changes, ${num(drafts.filter((o) => o.playbook === 'trip-meeting').length)} meeting requests, ${num(drafts.filter((o) => o.playbook === 'reconnect').length)} reconnects` : 'Nothing waiting'} />
-
         <Tile to={mailToReview ? "/contracts?tab=mail" : "/contracts"} icon={<FileSignature size={14} />} label="Legal: Lucas the Hog" value={num(m.negotiating.length)} sub={`contracts in negotiation · ${num(m.lucasDrafts.length)} drafts to review${mailToReview ? ` · ${num(mailToReview)} email changes to confirm` : ''}`} />
         <Tile to="/pipeline?view=reconnects" icon={<RotateCcw size={14} />} label="Reconnects due now" value={num(m.reconnectsNow.length)} sub={m.reconnectsNow[0] ? `Top: ${m.reconnectsNow[0].account.name}` : 'Lost and on-ice deals worth another try'} />
         <Tile to="/pipeline?flag=attention" icon={<TriangleAlert size={14} />} label="Deals needing attention" value={num(m.attention)} sub={`${num(m.stale)} stale for more than 30 days · ${num(m.pastDue)} past their close date`} />
-        <Tile to="/map#trip" icon={<Plane size={14} />} label="Next trip" value={trip ? `${trip.county ? `${trip.county}, ` : ''}${trip.state}` : 'None'} sub={trip ? `${new Date(trip.start + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} to ${new Date(trip.end + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · ${STATES[trip.state]?.name}` : 'Plan one under the heat map'} />
-
-        <Tile to="/signals?days=7" icon={<Newspaper size={14} />} label="Org changes, last 7 days" value={num(m.orgWeek.length)} sub={m.orgWeek[0]?.headline ?? 'No new changes'} />
-        <Tile to="/signals?tab=weather" icon={<CloudSun size={14} />} label="Weather impact" value={impact.status === 'ready' ? num(weather.length) : '…'} sub={impact.status === 'ready' ? `${num(severe)} severe · ${num(new Set(weather.flatMap((g) => g.accounts.map((a) => a.id))).size)} accounts affected` : 'Checking the forecast'} />
-        <Tile to="/signals?tab=grants" icon={<Landmark size={14} />} label="Grant applications" value={num(grantDrafts)} sub={`drafts that cover at least half of a purchase${taxNotes ? ` · ${num(taxNotes)} R&D tax-credit ${taxNotes === 1 ? 'note' : 'notes'}` : ''}`} />
-        <Tile to="/signals?tab=newsletter" icon={<Newspaper size={14} />} label="This week’s newsletter" value={num(m.issue.length)} sub="changes in The Hog, Herd & Field Brief" />
       </div>
 
       <nav className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-6" aria-label="Pipeline by stage">
