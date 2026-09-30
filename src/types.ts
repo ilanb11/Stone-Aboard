@@ -245,6 +245,8 @@ export interface Outreach {
   invoiceId?: string
   /** The sales trip this meeting request was drafted for (trip planner). */
   tripId?: string
+  /** Real delivery to the demo's test inbox (Real email on). Without it, "Sent" is simulated. */
+  delivery?: { status: 'Sending' | 'Delivered' | 'Failed'; at: string; to?: string; providerId?: string; error?: string }
 }
 
 export interface InvoiceLine {

@@ -1,11 +1,11 @@
 import type { Contract } from '../../types'
-import { CLAUSE } from '../../data/contracts'
+import { CLAUSE, REDLINE_BY_KEY } from '../../data/contracts'
 import { lucasStatus } from '../lucas'
 import type { RedlineDecision } from '../../store'
 import type { MailCtx } from './pipeline'
 import { INJECTION, unwrapForward } from './pipeline'
 import { inlinePairs, normalize, ourAddress, signatureState, splitQuoted } from './text'
-import type { AiMail, Evidence } from './schema'
+import type { AiMail } from './schema'
 import type { ClauseChange, MailExtraction, MailFlag, MailKind, MailMessage } from './types'
 
 // Claude reads an email the rules already read. The CRM decides the account link; Claude
@@ -94,10 +94,10 @@ export function fromAi(ai: AiMail, m: MailMessage, rules: MailExtraction, ctx: M
   const fwd = unwrapForward(m)
   const sources = [fresh, inline ? inlinePairs(quoted).map((p) => p.a).join('\n') : '', fwd?.body ?? '', ...m.attachments.map((f) => f.text ?? '')].map(flat)
   const warnings = [...(ai.warnings ?? [])]
-  const found = (ev: Evidence[] | undefined, what: string) => {
-    const q = ev?.find((e) => e.quote && sources.some((s) => s.includes(flat(e.quote))))
-    if (!q && ev?.length) warnings.push(`Dropped "${what}": its quote isn't in the email.`)
-    return q?.quote
+  const found = (quotes: string[] | undefined, what: string) => {
+    const q = quotes?.find((x) => x && sources.some((s) => s.includes(flat(x))))
+    if (!q && quotes?.length) warnings.push(`Dropped "${what}": its quote isn't in the email.`)
+    return q
   }
   const contract = rules.match.contractId ? ctx.contracts.find((c) => c.id === rules.match.contractId) : undefined
   const toUs = repliesTo(m, ctx) === 'our message' || (repliesTo(m, ctx) === 'unknown' && m.to.some((p) => ourAddress(p.email)))
@@ -105,21 +105,21 @@ export function fromAi(ai: AiMail, m: MailMessage, rules: MailExtraction, ctx: M
   const changes: ClauseChange[] = []
   for (const c of ai.changes ?? []) {
     if (!CLAUSE[c.clauseId] || c.action === 'withdraws_ask' || c.action === 'question_only') continue
-    const quote = found(c.evidence, c.summary || CLAUSE[c.clauseId].title)
+    const quote = found(c.quotes, c.summary || CLAUSE[c.clauseId].title)
     if (!quote) continue
     const action: ClauseChange['action'] = c.action === 'accepts_counter' || c.action === 'our_accept' ? 'accept' : c.action === 'rejects_counter' || c.action === 'our_reject' ? 'reject' : 'ask'
     // Agreement to our position counts only when the email answers us, not a colleague.
     if (action === 'accept' && !toUs) continue
-    changes.push({ clauseId: c.clauseId, action, libraryKey: c.libraryKey && c.libraryKey !== 'custom' ? c.libraryKey : undefined, proposed: c.proposedText || undefined, value: valueOf(c.values ?? {}), quote })
+    changes.push({ clauseId: c.clauseId, action, libraryKey: REDLINE_BY_KEY[c.libraryKey]?.clauseId === c.clauseId ? c.libraryKey : undefined, proposed: c.proposedText || undefined, value: valueOf(c.values ?? {}), quote })
   }
   // "We're good with everything": every open point on the contract, less the exceptions.
   if (ai.acceptance?.scope === 'all_open' && toUs && contract) {
-    const quote = found(ai.acceptance.evidence, 'acceptance')
+    const quote = found(ai.acceptance.quotes, 'acceptance')
     if (quote) for (const r of contract.redlines) if (!r.agreed && !ai.acceptance.exceptClauseIds.includes(r.clauseId) && !changes.some((c) => c.clauseId === r.clauseId)) changes.push({ clauseId: r.clauseId, action: 'accept', quote })
   }
 
   const sig = ai.signature?.status ?? 'none'
-  const sigQuote = sig !== 'none' ? found(ai.signature.evidence, 'signature') : undefined
+  const sigQuote = sig !== 'none' ? found(ai.signature.quotes, 'signature') : undefined
   // A signature needs something to hold: a file (or e-sign notice) the rules also saw, or an attachment whose quoted block reads as signed.
   const claimed = (sig === 'signed_by_customer' || sig === 'fully_executed' || sig === 'possibly_signed') && !!sigQuote
   const signed = claimed && (rules.kind === 'signed' || (m.attachments.length > 0 && signatureState(sigQuote!) === 'signed'))
@@ -136,11 +136,11 @@ export function fromAi(ai: AiMail, m: MailMessage, rules: MailExtraction, ctx: M
     : asks.length ? 'redlines'
     : ai.intent === 'verbal_accept' || sig === 'intended' || sig === 'requested' ? (toUs ? 'verbal-yes' : 'discussion')
     : byIntent[ai.intent] ?? 'discussion'
-  if (rules.direction === 'internal') kind = ai.internalApproval?.given && found(ai.internalApproval.evidence, 'approval') ? 'internal-approval' : rules.match.accountId ? 'discussion' : 'unrelated'
+  if (rules.direction === 'internal') kind = ai.internalApproval?.given && found(ai.internalApproval.quotes, 'approval') ? 'internal-approval' : rules.match.accountId ? 'discussion' : 'unrelated'
 
   // A new person Claude found, when the rules didn't: never one of our own addresses.
   const known = rules.match.accountId ? ctx.accounts.find((a) => a.id === rules.match.accountId)?.contacts ?? [] : []
-  const person = ai.people?.find((p) => p.email && !ourAddress(p.email) && !known.some((k) => k.email.toLowerCase() === p.email.toLowerCase() || k.altEmails?.includes(p.email)) && found(p.evidence, p.name))
+  const person = ai.people?.find((p) => p.email && !ourAddress(p.email) && !known.some((k) => k.email.toLowerCase() === p.email.toLowerCase() || k.altEmails?.includes(p.email)) && found(p.quotes, p.name))
   const flags = new Set<MailFlag>(rules.flags ?? [])
   if (ai.containsInstructionsToAssistant || INJECTION.test(fresh)) flags.add('injection')
   if (ai.missingAttachment) flags.add('missing_attachment')

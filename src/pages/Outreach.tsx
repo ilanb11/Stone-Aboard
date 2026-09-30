@@ -10,6 +10,8 @@ import { Button, Card, Chip, PageHeader, Pill, StatusBadge, Tabs, TextLink, inpu
 import { InvoicePreview } from '../components/InvoicePreview'
 import { relDays } from '../lib/format'
 import { Pager } from '../components/Pager'
+import { DeliveryBadge, LiveEmailCard } from '../components/LiveEmail'
+import { deliverOutreach } from '../lib/liveMail'
 
 // Editor fields share the design-system field style; the textarea sizes by rows instead of a fixed height.
 const subjectClass = `${inputClass} w-full font-medium`
@@ -66,6 +68,7 @@ function Item({ o }: { o: Outreach }) {
             </span>
             <Link to={`/accounts/${a.id}`} className="text-ink underline-offset-4 hover:underline">{a.name}</Link>
           </div>
+          {o.delivery && <div className="mt-1.5"><DeliveryBadge o={o} /></div>}
         </div>
         {o.status === 'Draft' && (
           <div className="flex shrink-0 flex-wrap gap-2">
@@ -73,7 +76,11 @@ function Item({ o }: { o: Outreach }) {
             {voided ? (
               <span className="self-center text-[13px] text-muted" title="Reopening the deal revives the contract and this email">Contract void (deal lost)</span>
             ) : (
-              <Button size="sm" variant="primary" onClick={() => (introFor ? approveDraft(introFor.id) : invoice ? approvePriceChange(o.id) : send(o.id))} title={introFor ? 'Approves the contract and sends this email' : invoice ? 'Sends this email with its invoice' : undefined}><Send size={12} /> {invoice ? 'Approve and send both' : 'Approve and send'}</Button>
+              <Button size="sm" variant="primary" onClick={() => {
+                (introFor ? approveDraft(introFor.id) : invoice ? approvePriceChange(o.id) : send(o.id))
+                // The click is the approval: with Real email on, this one also goes to the test inbox.
+                void deliverOutreach(o.id)
+              }} title={introFor ? 'Approves the contract and sends this email' : invoice ? 'Sends this email with its invoice' : undefined}><Send size={12} /> {invoice ? 'Approve and send both' : 'Approve and send'}</Button>
             )}
           </div>
         )}
@@ -168,8 +175,9 @@ export default function OutreachPage() {
     <div>
       <PageHeader
         title="Automated outreach"
-        subtitle="Org changes start playbook messages, and Pricing rank adds price-change emails with their invoices. Drafts wait for your approval unless auto-send is on for that playbook (price changes and contract emails never auto-send). Sending is simulated in this demo."
+        subtitle="Org changes start playbook messages, and Pricing rank adds price-change emails with their invoices. Drafts wait for your approval unless auto-send is on for that playbook (price changes and contract emails never auto-send). Sending is simulated unless Real email is on, and then only approved emails go, to the test inbox."
       />
+      <LiveEmailCard />
       {accountFilter && (
         <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-[14px] text-ink-2">
           <span>

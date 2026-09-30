@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import Anthropic from '@anthropic-ai/sdk'
 import { CLAUSES, TEMPLATE_VERSION } from '../src/data/contracts'
 import { MAIL_SCHEMA, MAIL_SYSTEM } from '../src/lib/mail/schema'
+import { handleMail } from './mail'
 
 // Lucas the Hog — contract review / negotiation agent, served from the Vite dev
 // server so the API key never reaches the browser. Credentials are resolved by
@@ -138,6 +139,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     const s = await aiStatus()
     return send(res, 200, { ai: s.ok, model: MODEL, error: s.ok ? undefined : s.error })
   }
+  // Real email for the demo (test inbox only, capped): see server/mail.ts.
+  if (await handleMail(url, req.method ?? 'GET', () => readJson(req), res)) return
   if (req.method !== 'POST') return send(res, 405, { error: 'POST only' })
   const body = await readJson(req)
 

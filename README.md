@@ -9,6 +9,8 @@ npm run dev        # http://localhost:5173
 
 To enable **Lucas the Hog** (Claude-powered contract agent) and AI outreach rewrites, copy `.env.example` to `.env`, set `ANTHROPIC_API_KEY`, and restart. Without a key, everything still works: Lucas falls back to the rule-based negotiation playbook.
 
+Real email for demos (optional): set `RESEND_API_KEY` and `MAIL_TEST_TO` in `.env` (see `.env.example`) and tick **Send real email** on Automated outreach. Approved emails, and price changes with their invoice PDF, then go to that one test inbox only, at most 5 in total (`server/mail.ts`, counted in `.mail-log.json`). Automatic sends and the published demo stay simulated.
+
 ## What's in it
 
 | Page | What it does |

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { ArrowLeft, Copy, Download, SendHorizonal } from 'lucide-react'
 import { useBook } from '../lib/useData'
 import { useCrm } from '../store'
+import { deliverOutreach } from '../lib/liveMail'
 import type { Contract, OrderLine } from '../types'
 import { OPERATION_LABEL } from '../types'
 import { PRODUCT, unitLabel } from '../data/products'
@@ -91,7 +92,7 @@ export default function LucasDraft({ contract: c }: { contract: Contract }) {
               {isFramed() ? <Copy size={14} /> : <Download size={14} />} {isFramed() ? 'Copy contract text' : 'Download contract'}
             </Button>
             {!locked && (
-              <Button variant="primary" onClick={() => approveDraft(c.id)}>
+              <Button variant="primary" onClick={() => { const emailId = c.draft?.emailId; approveDraft(c.id); if (emailId) void deliverOutreach(emailId) }}>
                 <SendHorizonal size={14} /> Approve and send
               </Button>
             )}
@@ -222,7 +223,7 @@ export default function LucasDraft({ contract: c }: { contract: Contract }) {
                 <p className="text-[12px] text-muted">The email updates with the contract terms until you edit it. The contract goes as an attachment. Sending is simulated in this demo, and it only happens when you approve.</p>
                 {!locked && (
                   <div>
-                    <Button variant="primary" onClick={() => approveDraft(c.id)}>
+                    <Button variant="primary" onClick={() => { const emailId = c.draft?.emailId; approveDraft(c.id); if (emailId) void deliverOutreach(emailId) }}>
                       <SendHorizonal size={14} /> Approve and send
                     </Button>
                   </div>

@@ -4,9 +4,9 @@ import tailwindcss from '@tailwindcss/vite'
 import { lucasApi } from './server/lucas'
 
 export default defineConfig(({ mode }) => {
-  // Make .env values (e.g. ANTHROPIC_API_KEY) visible to the server-side API only.
+  // Make .env values (API keys, the test inbox) visible to the server-side API only, never to the page.
   const env = loadEnv(mode, process.cwd(), '')
-  if (env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_API_KEY) process.env.ANTHROPIC_API_KEY = env.ANTHROPIC_API_KEY
+  for (const k of ['ANTHROPIC_API_KEY', 'RESEND_API_KEY', 'MAIL_TEST_TO', 'MAIL_MAX_SENDS', 'MAIL_FROM']) if (env[k] && !process.env[k]) process.env[k] = env[k]
   return {
     base: './',
     plugins: [react(), tailwindcss(), lucasApi()],

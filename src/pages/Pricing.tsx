@@ -6,6 +6,8 @@ import type { Account, Contract, Invoice } from '../types'
 import { Send } from 'lucide-react'
 import { Button, Card, Modal, PageHeader, Pill, StatusBadge, Tabs, TextLink, inputClass } from '../components/ui'
 import { InvoicePreview } from '../components/InvoicePreview'
+import { LiveEmailNote } from '../components/LiveEmail'
+import { deliverOutreach } from '../lib/liveMail'
 import { Pager } from '../components/Pager'
 import { draftBandNotice, type PriceChangeDraft } from '../lib/priceChangeDrafts'
 import { money, num, shortDate } from '../lib/format'
@@ -144,7 +146,7 @@ export function NoticeModal({ draft, onClose }: { draft: PriceChangeDraft; onClo
     <Modal open onClose={onClose} title={`Revised pricing for ${draft.invoice.billTo.name}`} wide>
       <div className="flex flex-col gap-3">
         <div className="text-[13px] text-ink-2">
-          To {draft.email.contactName} &lt;{draft.email.contactEmail}&gt;. Sending here sends the email with the revised invoice (simulated in this demo).
+          To {draft.email.contactName} &lt;{draft.email.contactEmail}&gt;. Sending here sends the email with the revised invoice (simulated unless Real email is on in Automated outreach).
         </div>
         <label className="flex flex-col gap-1.5 text-[13px] text-ink-2">
           <span>Subject</span>
@@ -156,10 +158,11 @@ export function NoticeModal({ draft, onClose }: { draft: PriceChangeDraft; onClo
         </label>
         <div className="text-[13px] text-ink-2">Revised invoice</div>
         <InvoicePreview inv={inv} />
+        <LiveEmailNote />
         <div className="mt-2 flex flex-wrap justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button onClick={() => { pushPriceChange(d, false); onClose() }}>Save as draft for approval</Button>
-          <Button variant="primary" onClick={() => { pushPriceChange(d, true); onClose() }}>
+          <Button variant="primary" onClick={() => { const id = pushPriceChange(d, true); void deliverOutreach(id); onClose() }}>
             <Send size={13} /> Send email and invoice
           </Button>
         </div>

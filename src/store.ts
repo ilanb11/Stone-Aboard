@@ -307,6 +307,9 @@ export interface CrmState extends MailSlice {
   /** Monthly sales targets (YYYY-MM -> ARR booked), for the dashboard's sales bar. */
   salesTargets: Record<string, number>
   setSalesTarget: (month: string, value: number) => void
+  /** Real email for the demo: approved sends also go to the test inbox (server/mail.ts). Off by default. */
+  liveEmail: boolean
+  setLiveEmail: (on: boolean) => void
   toast: Toast | null
   notify: (t: Omit<Toast, 'id'>) => void
   dismissToast: () => void
@@ -795,6 +798,8 @@ export const useCrm = create<CrmState>()(
       removeTrip: (id) => set((s) => ({ trips: s.trips.filter((t) => t.id !== id) })),
       salesTargets: {},
       setSalesTarget: (month, value) => set((s) => ({ salesTargets: { ...s.salesTargets, [month]: value } })),
+      liveEmail: false,
+      setLiveEmail: (on) => set({ liveEmail: on }),
       toast: null,
       notify: (t) => set({ toast: { ...t, id: uid('T') } }),
       dismissToast: () => set({ toast: null }),
@@ -861,7 +866,7 @@ export const useCrm = create<CrmState>()(
       version: SEED_VERSION,
       storage: createJSONStorage(() => localStorage),
       migrate: (persisted, version) => migrateState(persisted, version) as unknown as CrmState,
-      partialize: (s) => ({ accounts: s.accounts, contracts: s.contracts, opportunities: s.opportunities, outreach: s.outreach, activities: s.activities, reviews: s.reviews, decisions: s.decisions, chats: s.chats, autoSend: s.autoSend, priceProposals: s.priceProposals, wonUndo: s.wonUndo, grantApplications: s.grantApplications, grantTriggered: s.grantTriggered, pricingModel: s.pricingModel, priceList: s.priceList, invoices: s.invoices, trips: s.trips, salesTargets: s.salesTargets, mailboxes: s.mailboxes, mailRecords: s.mailRecords, mailProposals: s.mailProposals, signedCopies: s.signedCopies }),
+      partialize: (s) => ({ accounts: s.accounts, contracts: s.contracts, opportunities: s.opportunities, outreach: s.outreach, activities: s.activities, reviews: s.reviews, decisions: s.decisions, chats: s.chats, autoSend: s.autoSend, priceProposals: s.priceProposals, wonUndo: s.wonUndo, grantApplications: s.grantApplications, grantTriggered: s.grantTriggered, pricingModel: s.pricingModel, priceList: s.priceList, invoices: s.invoices, trips: s.trips, salesTargets: s.salesTargets, liveEmail: s.liveEmail, mailboxes: s.mailboxes, mailRecords: s.mailRecords, mailProposals: s.mailProposals, signedCopies: s.signedCopies }),
       // The saved price list replaces the base list prices everywhere they're read.
       onRehydrateStorage: () => (state) => {
         if (state?.priceList) applyPriceList(state.priceList)
