@@ -4,9 +4,10 @@ import type { Invoice, Outreach } from '../types'
 import { invoicePdf } from './invoicePdf'
 
 // Real email for the demo. The CRM's "Sent" stays a simulation unless Real email is on; then
-// an email a person approves also goes to the test inbox through the dev server
-// (server/mail.ts), which fixes the recipient and caps the count. Automatic sends never
-// come through here: only the approve buttons call deliverOutreach.
+// an email a person approves also goes to the test inbox, through the local dev server
+// (server/mail.ts) or the Vercel function (api/mail/[action].ts). Both fix the recipient and
+// cap the count; the public site also needs the demo passcode. Automatic sends never come
+// through here: only the approve buttons call deliverOutreach.
 
 export interface MailStatus {
   configured: boolean
@@ -15,9 +16,37 @@ export interface MailStatus {
   max: number
   remaining: number
   reason?: string
+  /** The public deployment: sending needs the demo passcode. */
+  needsPasscode?: boolean
+  unlocked?: boolean
 }
 
-const OFFLINE: MailStatus = { configured: false, to: '', sent: 0, max: 0, remaining: 0, reason: 'Real email needs the local dev server (npm run dev); the published demo only simulates sending.' }
+const OFFLINE: MailStatus = { configured: false, to: '', sent: 0, max: 0, remaining: 0, reason: "Real email isn't available in this copy of the demo; sending is simulated." }
+
+// The passcode is a per-browser convenience; it's checked on the server for every send.
+const PASS_KEY = 'herdbook-mail-passcode'
+export function getPasscode(): string {
+  try {
+    return localStorage.getItem(PASS_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+export function setPasscode(v: string) {
+  try {
+    if (v) localStorage.setItem(PASS_KEY, v)
+    else localStorage.removeItem(PASS_KEY)
+  } catch {
+    // Storage blocked: the passcode lasts until the page reloads.
+    memoryPass = v
+  }
+  memoryPass = v
+}
+let memoryPass = ''
+const passHeader = (): Record<string, string> => {
+  const p = getPasscode() || memoryPass
+  return p ? { 'x-herdbook-passcode': p } : {}
+}
 
 let current: MailStatus | null = null
 const listeners = new Set<(s: MailStatus) => void>()
@@ -29,8 +58,9 @@ const publish = (s: MailStatus) => {
 export async function refreshMailStatus(): Promise<MailStatus> {
   if (import.meta.env.VITE_ARTIFACT) return (publish(OFFLINE), OFFLINE)
   try {
-    const r = await fetch('/api/mail/status')
-    const s = r.ok ? ((await r.json()) as MailStatus) : OFFLINE
+    const r = await fetch('/api/mail/status', { headers: passHeader() })
+    const ok = r.ok && (r.headers.get('content-type') ?? '').includes('json')
+    const s = ok ? ((await r.json()) as MailStatus) : OFFLINE
     publish(s)
     return s
   } catch {
@@ -87,7 +117,7 @@ export async function deliverOutreach(outreachId: string): Promise<void> {
   }
   const o: Outreach | undefined = st.outreach.find((x) => x.id === outreachId)
   if (!o || o.status !== 'Sent' || (o.delivery && o.delivery.status !== 'Failed')) return
-  if (current && !current.configured) {
+  if (current && (!current.configured || (current.needsPasscode && !current.unlocked))) {
     st.notify({ text: `Not delivered: ${current.reason ?? 'real email is not set up'}` })
     return
   }
@@ -100,7 +130,7 @@ export async function deliverOutreach(outreachId: string): Promise<void> {
     const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;color:#111;max-width:640px">
 <p style="font-size:12px;color:#777;border-bottom:1px solid #e5e5e5;padding-bottom:8px;margin:0 0 14px">${esc(note)}</p>
 <div style="white-space:pre-wrap">${esc(o.body)}</div>${inv ? invoiceHtml(inv) : ''}</div>`
-    const r = await fetch('/api/mail/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ outreachId: o.id, subject: o.subject, text: `${note}\n\n${o.body}${inv ? `\n\nInvoice ${inv.id}: $${inv.total.toLocaleString('en-US')} a month (attached as a PDF).` : ''}`, html, attachments }) })
+    const r = await fetch('/api/mail/send', { method: 'POST', headers: { 'Content-Type': 'application/json', ...passHeader() }, body: JSON.stringify({ outreachId: o.id, subject: o.subject, text: `${note}\n\n${o.body}${inv ? `\n\nInvoice ${inv.id}: $${inv.total.toLocaleString('en-US')} a month (attached as a PDF).` : ''}`, html, attachments }) })
     const json = (await r.json().catch(() => ({}))) as { id?: string; to?: string; error?: string }
     if (!r.ok) throw new Error(json.error ?? `HTTP ${r.status}`)
     useCrm.getState().updateOutreach(o.id, { delivery: { status: 'Delivered', at: new Date().toISOString(), to: json.to, providerId: json.id } })

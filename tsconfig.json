@@ -1,4 +1,4 @@
-﻿{
+{
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
@@ -15,5 +15,5 @@
     "noEmit": true,
     "types": ["vite/client", "node"]
   },
-  "include": ["src", "server", "vite.config.ts"]
+  "include": ["src", "server", "api", "vite.config.ts"]
 }

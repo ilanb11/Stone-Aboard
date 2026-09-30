@@ -1,20 +1,19 @@
 import type { ServerResponse } from 'node:http'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { HARD_CAP, cleanSendBody, mailConfig, resendSend, resendSentCount } from './mailCore'
 
-// Real email for the demo, sent through Resend (https://resend.com) from the dev server so
-// the API key never reaches the browser. Guard rails, all enforced here rather than in the
-// page:
-// - One recipient: every email goes to MAIL_TEST_TO, whoever it was drafted for. The page
-//   can't choose the address.
-// - A hard cap: at most MAIL_MAX_SENDS emails (never more than HARD_CAP), counted in
-//   .mail-log.json so restarting the server doesn't reset it. Delete that file to reset.
+// Real email for the demo from the local dev server (the Vercel deployment uses
+// api/mail/[action].ts with the same rules from mailCore.ts). Guard rails, enforced here
+// rather than in the page:
+// - One recipient: every email goes to MAIL_TEST_TO, whoever it was drafted for.
+// - A hard cap of 5, counted in .mail-log.json so restarting doesn't reset it (delete the
+//   file to reset), and also in Resend's own history when the key can read it, so the
+//   local server and Vercel share one limit.
 // - Once per message: an outreach id that was sent (or might have been) is never sent again.
 // Automatic sends in the CRM stay simulated; only a person's click calls this.
 
-const HARD_CAP = 5
 const LOG = join(process.cwd(), '.mail-log.json')
-const EMAIL = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/
 
 interface LogEntry {
   outreachId: string
@@ -38,18 +37,7 @@ function setting(k: string): string {
     return ''
   }
 }
-
-function config() {
-  const raw = setting('MAIL_MAX_SENDS')
-  const n = Number(raw)
-  const to = setting('MAIL_TEST_TO')
-  return {
-    key: setting('RESEND_API_KEY'),
-    to: EMAIL.test(to) ? to : '',
-    max: Math.min(HARD_CAP, raw && Number.isFinite(n) && n >= 0 ? Math.floor(n) : HARD_CAP),
-    from: setting('MAIL_FROM') || 'Herdbook demo <onboarding@resend.dev>',
-  }
-}
+const config = () => mailConfig(setting)
 
 const readLog = (): LogEntry[] => {
   try {
@@ -62,12 +50,20 @@ const readLog = (): LogEntry[] => {
 const writeLog = (log: LogEntry[]) => writeFileSync(LOG, JSON.stringify(log, null, 2))
 const counted = (log: LogEntry[]) => log.filter((e) => e.status !== 'failed').length
 
-function status() {
+/** Sends so far: the local log, or Resend's history if that shows more (sends from Vercel). */
+async function used(key: string, log: LogEntry[]) {
+  const local = counted(log)
+  if (!key) return local
+  const remote = await resendSentCount(key)
+  return 'count' in remote ? Math.max(local, remote.count) : local
+}
+
+async function status() {
   const c = config()
   const log = readLog()
-  const used = counted(log)
-  const reason = !c.key ? 'Paste your Resend API key after RESEND_API_KEY= in .env, save, then press the refresh button here.' : !c.to ? 'Add MAIL_TEST_TO (your own address) to .env, save, then press the refresh button here.' : used >= c.max ? `The limit of ${c.max} test emails is used up. Delete .mail-log.json to reset it.` : undefined
-  return { configured: !!c.key && !!c.to, to: c.to, sent: used, max: c.max, remaining: Math.max(0, c.max - used), reason, recent: log.slice(-5).reverse().map(({ subject, at, status }) => ({ subject, at, status })) }
+  const n = await used(c.key, log)
+  const reason = !c.key ? 'Paste your Resend API key after RESEND_API_KEY= in .env, save, then press the refresh button here.' : !c.to ? 'Add MAIL_TEST_TO (your own address) to .env, save, then press the refresh button here.' : n >= c.max ? `The limit of ${c.max} test emails is used up. Delete .mail-log.json to reset the local count.` : undefined
+  return { configured: !!c.key && !!c.to, to: c.to, sent: n, max: c.max, remaining: Math.max(0, c.max - n), reason, needsPasscode: false, recent: log.slice(-5).reverse().map(({ subject, at, status }) => ({ subject, at, status })) }
 }
 
 function send(res: ServerResponse, code: number, body: unknown) {
@@ -76,68 +72,38 @@ function send(res: ServerResponse, code: number, body: unknown) {
   res.end(JSON.stringify(body))
 }
 
-interface SendBody {
-  outreachId?: unknown
-  subject?: unknown
-  text?: unknown
-  html?: unknown
-  attachments?: unknown
-}
-
 // Sends run one at a time, so two quick clicks can't both slip under the cap.
 let queue: Promise<unknown> = Promise.resolve()
 
-async function deliver(body: SendBody) {
+async function deliver(body: Record<string, unknown>) {
   const c = config()
-  const outreachId = typeof body.outreachId === 'string' ? body.outreachId.slice(0, 80) : ''
-  const subject = typeof body.subject === 'string' ? body.subject.replace(/[\r\n]+/g, ' ').slice(0, 200) : ''
-  const text = typeof body.text === 'string' ? body.text.slice(0, 20_000) : ''
-  const html = typeof body.html === 'string' ? body.html.slice(0, 200_000) : undefined
-  const files = (Array.isArray(body.attachments) ? body.attachments : [])
-    .slice(0, 2)
-    .filter((f): f is { filename: string; content: string } => !!f && typeof f.filename === 'string' && typeof f.content === 'string' && f.content.length <= 3_000_000)
-    .map((f) => ({ filename: f.filename.replace(/[^\w .()-]/g, '_').slice(0, 100), content: f.content }))
-  if (!c.key || !c.to) return { code: 503, body: { error: status().reason } }
-  if (!outreachId || !subject || !text) return { code: 400, body: { error: 'Expected outreachId, subject and text.' } }
+  if (!c.key || !c.to) return { code: 503, body: { error: (await status()).reason } }
+  const m = cleanSendBody(body)
+  if ('error' in m) return { code: 400, body: m }
   const log = readLog()
-  const prior = log.find((e) => e.outreachId === outreachId && e.status !== 'failed')
+  const prior = log.find((e) => e.outreachId === m.outreachId && e.status !== 'failed')
   if (prior) return { code: 409, body: { error: 'This email was already sent to the test inbox.', to: prior.to, at: prior.at } }
-  if (counted(log) >= c.max) return { code: 429, body: { error: `The limit of ${c.max} test emails is used up. Delete .mail-log.json in the project folder to reset it.` } }
+  if ((await used(c.key, log)) >= c.max) return { code: 429, body: { error: `The limit of ${c.max} test emails is used up.` } }
 
   // Reserve the slot before calling out, so a crash mid-send still counts against the cap.
-  const entry: LogEntry = { outreachId, subject, to: c.to, at: new Date().toISOString(), status: 'sending' }
+  const entry: LogEntry = { outreachId: m.outreachId, subject: m.subject, to: c.to, at: new Date().toISOString(), status: 'sending' }
   log.push(entry)
   writeLog(log)
-  const finish = (patch: Partial<LogEntry>) => {
-    const next = readLog().map((e) => (e.outreachId === outreachId && e.at === entry.at ? { ...e, ...patch } : e))
-    writeLog(next)
+  const finish = (patch: Partial<LogEntry>) => writeLog(readLog().map((e) => (e.outreachId === m.outreachId && e.at === entry.at ? { ...e, ...patch } : e)))
+  const r = await resendSend(c, m)
+  if (r.ok) {
+    finish({ status: 'sent', providerId: r.id })
+    return { code: 200, body: { ...(await status()), id: r.id } }
   }
-  try {
-    const r = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${c.key}`, 'Content-Type': 'application/json', 'Idempotency-Key': `herdbook-${outreachId}` },
-      body: JSON.stringify({ from: c.from, to: [c.to], subject: `[Herdbook demo] ${subject}`, text, html, attachments: files.length ? files : undefined }),
-      signal: AbortSignal.timeout(20_000),
-    })
-    const json = (await r.json().catch(() => ({}))) as { id?: string; message?: string }
-    if (!r.ok) {
-      // Resend refused it, so nothing went out and the slot is freed.
-      finish({ status: 'failed', error: json.message ?? `HTTP ${r.status}` })
-      return { code: 502, body: { error: `Resend refused the email: ${json.message ?? `HTTP ${r.status}`}` } }
-    }
-    finish({ status: 'sent', providerId: json.id })
-    return { code: 200, body: { ...status(), id: json.id } }
-  } catch (e) {
-    // A timeout may still have delivered: keep it counted and don't retry this message.
-    finish({ status: 'unknown', error: e instanceof Error ? e.message : String(e) })
-    return { code: 504, body: { error: `No answer from Resend (${e instanceof Error ? e.message : String(e)}). Check your inbox before trying another email; this one won't be resent.` } }
-  }
+  // Refused: nothing went out and the slot is freed. No answer: it may have gone, so it stays counted.
+  finish({ status: r.refused ? 'failed' : 'unknown', error: r.error })
+  return { code: r.refused ? 502 : 504, body: { error: r.error } }
 }
 
 /** /api/mail/status (GET) and /api/mail/send (POST). Returns false when the url isn't a mail route. */
 export async function handleMail(url: string, method: string, readBody: () => Promise<Record<string, unknown>>, res: ServerResponse): Promise<boolean> {
   if (url.startsWith('/api/mail/status')) {
-    send(res, 200, status())
+    send(res, 200, await status())
     return true
   }
   if (url.startsWith('/api/mail/send')) {
