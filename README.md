@@ -9,7 +9,7 @@ npm run dev        # http://localhost:5173
 
 To enable **Lucas the Hog** (Claude-powered contract agent) and AI outreach rewrites, copy `.env.example` to `.env`, set `ANTHROPIC_API_KEY`, and restart. Without a key, everything still works: Lucas falls back to the rule-based negotiation playbook.
 
-Real email for demos (optional): set `RESEND_API_KEY` and `MAIL_TEST_TO` in `.env` (see `.env.example`) and tick **Send real email** on Automated outreach. Approved emails, and price changes with their invoice PDF, then go to that one test inbox only, at most 5 in total (`server/mail.ts`, counted in `.mail-log.json`). Automatic sends stay simulated. On Vercel the same rules run in `api/mail/[action].ts`: set `RESEND_API_KEY` (a Full access key, so the function can count sends from Resend's history), `MAIL_TEST_TO` and `MAIL_SEND_PASSCODE` in the project's environment variables, redeploy, and enter the passcode on the Real email card; without the passcode the public site never sends.
+Real email for demos (optional): set `RESEND_API_KEY` and `MAIL_TEST_TO` in `.env` (see `.env.example`) and tick **Send real email** on Automated outreach. Approved emails, and price changes with their invoice PDF, then go to that one test inbox only (`server/mail.ts`); set `MAIL_MAX_SENDS` to cap how many (counted in `.mail-log.json`). Automatic sends stay simulated. On Vercel the same rules run in `api/mail/[action].ts`: set `RESEND_API_KEY`, `MAIL_TEST_TO` and `MAIL_SEND_PASSCODE` (plus `MAIL_MAX_SENDS` to cap sends, which needs a Full access key so the function can count from Resend's history) in the project's environment variables, redeploy, and enter the passcode on the Real email card; without the passcode the public site never sends.
 
 ## What's in it
 

@@ -4,8 +4,9 @@ import { cleanSendBody, mailConfig, maskEmail, resendSend, resendSentCount, same
 // local dev server (server/mailCore.ts), with two differences for a public site:
 // - Sending needs the passcode in MAIL_SEND_PASSCODE (sent by the page as x-herdbook-passcode).
 //   Without it the function sends nothing and shows only a masked address.
-// - Functions keep no files between calls, so the cap is counted from Resend's own history.
-//   That needs a Full access Resend key; with a send-only key it refuses to send.
+// - With MAIL_MAX_SENDS set, the cap is counted from Resend's own history (functions keep no
+//   files between calls), which needs a Full access Resend key. With it unset there is no cap
+//   and a send-only key is enough.
 
 interface Req {
   method?: string
@@ -30,6 +31,8 @@ async function status(unlocked: boolean) {
   const base = { needsPasscode: true, unlocked, max: c.max, to: unlocked ? c.to : c.to ? maskEmail(c.to) : '' }
   if (!c.key || !c.to) return { ...base, configured: false, sent: 0, remaining: 0, reason: 'Real email is not set up on this deployment: add RESEND_API_KEY and MAIL_TEST_TO in the Vercel project settings and redeploy.' }
   if (!c.passcode) return { ...base, configured: false, sent: 0, remaining: 0, reason: 'Add MAIL_SEND_PASSCODE in the Vercel project settings and redeploy; the public site never sends without it.' }
+  // No cap, nothing to count: a send-only key works.
+  if (c.max === null) return { ...base, configured: true, sent: null, remaining: null, reason: unlocked ? undefined : 'Enter the demo passcode to send.' }
   const n = await resendSentCount(c.key)
   if ('error' in n) return { ...base, configured: false, sent: 0, remaining: 0, reason: n.restricted ? "The Resend key on Vercel can only send, so the site can't count what was sent and won't send. Create a Full access key in Resend and use it for RESEND_API_KEY on Vercel." : n.error }
   const remaining = Math.max(0, c.max - n.count)
@@ -49,7 +52,7 @@ export default async function handler(req: Req, res: Res) {
 
   const st = await status(true)
   if (!st.configured) return res.status(503).json({ error: st.reason })
-  if (st.remaining <= 0) return res.status(429).json({ error: st.reason })
+  if (st.remaining !== null && st.remaining <= 0) return res.status(429).json({ error: st.reason })
   const body = (typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body ?? {}) as Record<string, unknown>
   const m = cleanSendBody(body)
   if ('error' in m) return res.status(400).json(m)

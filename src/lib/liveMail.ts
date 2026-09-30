@@ -12,9 +12,10 @@ import { invoicePdf } from './invoicePdf'
 export interface MailStatus {
   configured: boolean
   to: string
-  sent: number
-  max: number
-  remaining: number
+  /** null: no limit is set (MAIL_MAX_SENDS unset). */
+  sent: number | null
+  max: number | null
+  remaining: number | null
   reason?: string
   /** The public deployment: sending needs the demo passcode. */
   needsPasscode?: boolean

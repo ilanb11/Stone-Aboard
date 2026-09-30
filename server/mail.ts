@@ -1,15 +1,15 @@
 import type { ServerResponse } from 'node:http'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { HARD_CAP, cleanSendBody, mailConfig, resendSend, resendSentCount } from './mailCore'
+import { cleanSendBody, mailConfig, resendSend, resendSentCount } from './mailCore'
 
 // Real email for the demo from the local dev server (the Vercel deployment uses
 // api/mail/[action].ts with the same rules from mailCore.ts). Guard rails, enforced here
 // rather than in the page:
 // - One recipient: every email goes to MAIL_TEST_TO, whoever it was drafted for.
-// - A hard cap of 5, counted in .mail-log.json so restarting doesn't reset it (delete the
-//   file to reset), and also in Resend's own history when the key can read it, so the
-//   local server and Vercel share one limit.
+// - An optional cap (MAIL_MAX_SENDS; none when unset), counted in .mail-log.json so restarting
+//   doesn't reset it (delete the file to reset), and also in Resend's own history when the key
+//   can read it, so the local server and Vercel share one limit.
 // - Once per message: an outreach id that was sent (or might have been) is never sent again.
 // Automatic sends in the CRM stay simulated; only a person's click calls this.
 
@@ -43,17 +43,18 @@ const readLog = (): LogEntry[] => {
   try {
     return existsSync(LOG) ? (JSON.parse(readFileSync(LOG, 'utf8')) as LogEntry[]) : []
   } catch {
-    // A damaged log must not reopen the cap: treat it as full until someone looks at it.
-    return Array.from({ length: HARD_CAP }, (_, i) => ({ outreachId: `unreadable-${i}`, subject: '', to: '', at: '', status: 'unknown' as const }))
+    // A damaged log must not reopen a cap: with one set, treat it as full until someone looks at it.
+    const cap = config().max
+    return cap === null ? [] : Array.from({ length: cap }, (_, i) => ({ outreachId: `unreadable-${i}`, subject: '', to: '', at: '', status: 'unknown' as const }))
   }
 }
 const writeLog = (log: LogEntry[]) => writeFileSync(LOG, JSON.stringify(log, null, 2))
 const counted = (log: LogEntry[]) => log.filter((e) => e.status !== 'failed').length
 
 /** Sends so far: the local log, or Resend's history if that shows more (sends from Vercel). */
-async function used(key: string, log: LogEntry[]) {
+async function used(key: string, max: number | null, log: LogEntry[]) {
   const local = counted(log)
-  if (!key) return local
+  if (!key || max === null) return local
   const remote = await resendSentCount(key)
   return 'count' in remote ? Math.max(local, remote.count) : local
 }
@@ -61,9 +62,9 @@ async function used(key: string, log: LogEntry[]) {
 async function status() {
   const c = config()
   const log = readLog()
-  const n = await used(c.key, log)
-  const reason = !c.key ? 'Paste your Resend API key after RESEND_API_KEY= in .env, save, then press the refresh button here.' : !c.to ? 'Add MAIL_TEST_TO (your own address) to .env, save, then press the refresh button here.' : n >= c.max ? `The limit of ${c.max} test emails is used up. Delete .mail-log.json to reset the local count.` : undefined
-  return { configured: !!c.key && !!c.to, to: c.to, sent: n, max: c.max, remaining: Math.max(0, c.max - n), reason, needsPasscode: false, recent: log.slice(-5).reverse().map(({ subject, at, status }) => ({ subject, at, status })) }
+  const n = await used(c.key, c.max, log)
+  const reason = !c.key ? 'Paste your Resend API key after RESEND_API_KEY= in .env, save, then press the refresh button here.' : !c.to ? 'Add MAIL_TEST_TO (your own address) to .env, save, then press the refresh button here.' : c.max !== null && n >= c.max ? `The limit of ${c.max} test emails is used up. Delete .mail-log.json to reset the local count.` : undefined
+  return { configured: !!c.key && !!c.to, to: c.to, sent: n, max: c.max, remaining: c.max === null ? null : Math.max(0, c.max - n), reason, needsPasscode: false, recent: log.slice(-5).reverse().map(({ subject, at, status }) => ({ subject, at, status })) }
 }
 
 function send(res: ServerResponse, code: number, body: unknown) {
@@ -83,7 +84,7 @@ async function deliver(body: Record<string, unknown>) {
   const log = readLog()
   const prior = log.find((e) => e.outreachId === m.outreachId && e.status !== 'failed')
   if (prior) return { code: 409, body: { error: 'This email was already sent to the test inbox.', to: prior.to, at: prior.at } }
-  if ((await used(c.key, log)) >= c.max) return { code: 429, body: { error: `The limit of ${c.max} test emails is used up.` } }
+  if (c.max !== null && (await used(c.key, c.max, log)) >= c.max) return { code: 429, body: { error: `The limit of ${c.max} test emails is used up.` } }
 
   // Reserve the slot before calling out, so a crash mid-send still counts against the cap.
   const entry: LogEntry = { outreachId: m.outreachId, subject: m.subject, to: c.to, at: new Date().toISOString(), status: 'sending' }

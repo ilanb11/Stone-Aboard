@@ -2,18 +2,21 @@
 // the rules for real demo email, and the calls to Resend. No Node-only imports, so both
 // runtimes can use it.
 //
-// The rules: one recipient (MAIL_TEST_TO, never an address from the page), at most HARD_CAP
-// emails, and each message once. Every email's subject starts with PREFIX, which is how the
-// sent ones are counted in Resend's own history (kept 30 days on the free plan).
+// The rules: one recipient (MAIL_TEST_TO, never an address from the page), each message once,
+// and an optional cap: with MAIL_MAX_SENDS set, at most that many emails (counted from Resend's
+// own history on Vercel, which needs a Full access key); without it there's no limit and a
+// send-only key is enough. Every email's subject starts with PREFIX, which is how the sent ones
+// are recognized in that history (kept 30 days on the free plan).
 
-export const HARD_CAP = 5
+const HISTORY_STOP = 1000
 export const PREFIX = '[Herdbook demo] '
 export const EMAIL = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/
 
 export interface MailConfig {
   key: string
   to: string
-  max: number
+  /** null: no limit. */
+  max: number | null
   from: string
   /** Required on a public deployment: without it, anyone who found the site could send. */
   passcode: string
@@ -26,7 +29,7 @@ export function mailConfig(get: (k: string) => string): MailConfig {
   return {
     key: get('RESEND_API_KEY'),
     to: EMAIL.test(to) ? to : '',
-    max: Math.min(HARD_CAP, raw && Number.isFinite(n) && n >= 0 ? Math.floor(n) : HARD_CAP),
+    max: raw && Number.isFinite(n) && n >= 0 ? Math.floor(n) : null,
     from: get('MAIL_FROM') || 'Herdbook demo <onboarding@resend.dev>',
     passcode: get('MAIL_SEND_PASSCODE'),
   }
@@ -47,7 +50,7 @@ export function samePasscode(a: string, b: string) {
  * How many demo emails Resend has sent for this account (subjects starting with PREFIX).
  * Needs a Full access key: a send-only key can't read the history.
  */
-export async function resendSentCount(key: string, stopAt = HARD_CAP): Promise<{ count: number } | { error: string; restricted: boolean }> {
+export async function resendSentCount(key: string, stopAt = HISTORY_STOP): Promise<{ count: number } | { error: string; restricted: boolean }> {
   let count = 0
   let after = ''
   for (let page = 0; page < 10; page++) {

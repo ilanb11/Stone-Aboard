@@ -34,7 +34,7 @@ export function LiveEmailCard() {
   const setOn = useCrm((s) => s.setLiveEmail)
   const st = useMailStatus()
   const locked = !!st?.needsPasscode && !st.unlocked
-  const ready = !!st?.configured && st.remaining > 0 && !locked
+  const ready = !!st?.configured && (st.remaining === null || st.remaining > 0) && !locked
   return (
     <section className="mb-5 flex flex-wrap items-start justify-between gap-4 rounded-[var(--radius-card)] border border-line bg-surface px-5 py-4">
       <div className="min-w-0 max-w-[70ch]">
@@ -47,10 +47,10 @@ export function LiveEmailCard() {
             ? 'Checking the mail server…'
             : !st.configured
               ? st.reason
-              : `When on, an email you approve also goes to ${st.to}, whoever it was drafted for, with its invoice attached as a PDF. Automatic sends stay simulated. ${st.remaining} of ${st.max} test emails left.${locked ? ' Enter the demo passcode to send from this site.' : ''}`}
+              : `When on, an email you approve also goes to ${st.to}, whoever it was drafted for, with its invoice attached as a PDF. Automatic sends stay simulated.${st.remaining === null ? '' : ` ${st.remaining} of ${st.max} test emails left.`}${locked ? ' Enter the demo passcode to send from this site.' : ''}`}
         </p>
         {st?.configured && st.remaining === 0 && <p className="mt-1 text-[13px] text-serious">{st.reason}</p>}
-        {st?.configured && locked && st.remaining > 0 && <PasscodeBox />}
+        {st?.configured && locked && (st.remaining ?? 1) > 0 && <PasscodeBox />}
         {st?.needsPasscode && st.unlocked && (
           <button type="button" className="mt-1 text-[12px] text-muted underline-offset-4 hover:underline" onClick={() => { setPasscode(''); setOn(false); void refreshMailStatus() }}>
             Lock sending on this browser
@@ -76,7 +76,7 @@ export function LiveEmailNote() {
   return (
     <p className="text-[13px] text-ink-2">
       Real email is on: sending also emails {st.to}{st.remaining ? ` (${st.remaining} of ${st.max} left)` : ''}.
-      {!st.remaining && <span className="text-serious"> The test limit is used up, so it stays simulated.</span>}
+      {st.remaining === 0 && <span className="text-serious"> The test limit is used up, so it stays simulated.</span>}
     </p>
   )
 }
