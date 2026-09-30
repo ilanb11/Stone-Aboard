@@ -14,6 +14,7 @@ import { SignedContractButton } from '../components/SignedContractButton'
 import { Pager } from '../components/Pager'
 import type { PriceChangeDraft } from '../lib/priceChangeDrafts'
 import { NoticeAction, NoticeModal, PriceAnalysisPanel, lastNotices } from './Pricing'
+import { RenewalPricing } from './pricing/RenewalPricing'
 
 /** Label above value, like a spec sheet. */
 function Fact({ label, children, className = '' }: { label: string; children: ReactNode; className?: string }) {
@@ -281,6 +282,8 @@ export default function AccountDetail() {
               )}
             </Card>
           )}
+
+          <RenewalPricing a={a} contract={contract} />
 
           {pa && (
             <Card title="Pricing normalization">

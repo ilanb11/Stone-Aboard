@@ -272,6 +272,17 @@ export function rankAccount(a: Account, c: Contract | undefined, m: PricingModel
   }
 }
 
+/**
+ * The same account repriced to the price catalog: every product toward its list price, by at most
+ * MAX_RENEWAL_INCREASE in one step. The alternative to moving to the unit-economics target.
+ */
+export function catalogRank(r: UnitRank): UnitRank {
+  const goal = Math.max(r.currentArr, Math.min(r.listArr, r.currentArr * (1 + MAX_RENEWAL_INCREASE)))
+  const lines = repriceLines(r.account.subscriptions, goal / 12, true)
+  const renewalArr = lines.reduce((s, l) => s + l.units * l.newPrice, 0) * 12
+  return { ...r, lines, renewalArr, upliftArr: Math.max(0, renewalArr - r.currentArr), targetPerUnit: r.listArr / r.volume.qty, targetOverridden: false, cappedAtList: false }
+}
+
 /** Every customer, furthest under target first (rank 1) to furthest over target. */
 export function rankCustomers(customers: Account[], contracts: Record<string, Contract>, m: PricingModel, f: SegmentFactors, today = new Date()): UnitRank[] {
   return customers

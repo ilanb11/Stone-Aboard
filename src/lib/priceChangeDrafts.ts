@@ -95,7 +95,7 @@ export function draftBandNotice(a: Account, pa: PricingAnalysis, contract: Contr
 }
 
 /** Both drafts for one ranked account. Returns null when the model calls for no change. */
-export function draftPriceChange(r: UnitRank, today = new Date()): PriceChangeDraft | null {
+export function draftPriceChange(r: UnitRank, today = new Date(), basis: 'target' | 'catalog' = 'target'): PriceChangeDraft | null {
   const a: Account = r.account
   if (r.upliftArr < 1 || !r.renewal) return null
   const rw = r.renewal
@@ -130,7 +130,11 @@ export function draftPriceChange(r: UnitRank, today = new Date()): PriceChangeDr
     when,
     '',
     // The target follows this account's own product and site mix, so it isn't a price for the whole segment.
-    `Today your subscription works out to ${unitMoney(r.currentPerUnit)} per ${one} a year across ${r.volume.qty.toLocaleString('en-US')} ${units}. For an operation with your products and sites, our target is ${unitMoney(r.targetPerUnit)} per ${one}${r.cappedAtList ? ', and your new rate stops at our standard list price' : ''}. From ${long(rw.date)}, your subscription moves to ${usd(newM)} a month (${whole(r.renewalArr)} a year), up from ${usd(curM)}, a ${pct.toFixed(1)}% change. That's ${unitMoney(newPerUnit)} per ${one}.`,
+    `Today your subscription works out to ${unitMoney(r.currentPerUnit)} per ${one} a year across ${r.volume.qty.toLocaleString('en-US')} ${units}. ${
+      basis === 'catalog'
+        ? `At our standard price list, your products and sites come to ${unitMoney(r.targetPerUnit)} per ${one}${r.renewalArr < r.listArr - 1 ? ', and we are moving you part of the way this renewal' : ', and that is where your new rate lands'}`
+        : `For an operation with your products and sites, our target is ${unitMoney(r.targetPerUnit)} per ${one}${r.cappedAtList ? ', and your new rate stops at our standard list price' : ''}`
+    }. From ${long(rw.date)}, your subscription moves to ${usd(newM)} a month (${whole(r.renewalArr)} a year), up from ${usd(curM)}, a ${pct.toFixed(1)}% change. That's ${unitMoney(newPerUnit)} per ${one}.`,
     '',
     'What changes:',
     ...changeLines(lines),
@@ -147,7 +151,7 @@ export function draftPriceChange(r: UnitRank, today = new Date()): PriceChangeDr
   return {
     email: {
       accountId: a.id,
-      trigger: `Price change at renewal (${changed.length} ${changed.length === 1 ? 'line' : 'lines'}, +${pct.toFixed(1)}%)`,
+      trigger: `Price change at renewal${basis === 'catalog' ? ' to the price list' : ''} (${changed.length} ${changed.length === 1 ? 'line' : 'lines'}, +${pct.toFixed(1)}%)`,
       playbook: 'price-change',
       contactName: c.name,
       contactEmail: c.email,
