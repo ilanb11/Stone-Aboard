@@ -15,6 +15,7 @@ import GrantDraft from './pages/GrantDraft'
 import { CURRENT_USER, useCrm } from './store'
 import { Toaster } from './components/Toaster'
 import { initials } from './lib/format'
+import profilePhoto from './assets/profile.jpg'
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -24,7 +25,7 @@ const NAV = [
   { to: '/signals', label: 'Signals and newsletter', icon: Newspaper },
   { to: '/outreach', label: 'Automated outreach', icon: Send },
   { to: '/pricing', label: 'Pricing', icon: BadgeDollarSign },
-  { to: '/contracts', label: 'Lucas the Hog', icon: FileSignature },
+  { to: '/contracts', label: 'Lucas the Hog', icon: FileSignature, photo: profilePhoto },
 ]
 
 /** Old Opportunities links (bookmarks, ?view=board) land on Pipeline Review with their query intact. */
@@ -132,6 +133,7 @@ export default function App() {
             >
               <n.icon size={16} strokeWidth={1.8} />
               {n.label}
+              {'photo' in n && <img src={n.photo} alt="" className="ml-auto h-7 w-7 rounded-full object-cover ring-2 ring-white/30" />}
             </NavLink>
           ))}
         </nav>
